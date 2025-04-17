@@ -1,0 +1,65 @@
+defaults:
+  in_channels: 192
+  out_channels: 64
+  kernel_size: 3
+  stride: 1
+  padding: 1
+
+modules:
+  entry:
+    - x
+    - batch
+
+  conv1:
+    cls: torch.nn.Conv2d
+    config:
+      in_channels: ${defaults.in_channels}
+      out_channels: ${defaults.out_channels}
+      kernel_size: ${defaults.kernel_size}
+      stride: ${defaults.stride}
+      padding: ${defaults.padding}
+    inp_src:
+      - x
+
+  bn1:
+    cls: torch.nn.BatchNorm2d
+    config:
+      num_features: ${modules.conv1.config.out_channels}
+    inp_src:
+      - conv1
+
+  relu1:
+    cls: torch.nn.ReLU
+    config:
+      inplace: true
+    inp_src:
+      - bn1
+
+  conv2:
+    cls: torch.nn.Conv2d
+    config:
+      in_channels: ${modules.conv1.config.out_channels}
+      out_channels: ${defaults.out_channels * 2}
+      kernel_size: ${defaults.kernel_size}
+      stride: ${defaults.stride}
+      padding: ${defaults.padding}
+    inp_src:
+      - relu1
+
+  bn2:
+    cls: torch.nn.BatchNorm2d
+    config:
+      num_features: ${modules.conv2.config.out_channels}
+    inp_src:
+      - conv2
+
+  relu2:
+    cls: torch.nn.ReLU
+    config:
+      inplace: true
+    inp_src:
+      - bn2
+
+  exit:
+    - relu2
+    - batch

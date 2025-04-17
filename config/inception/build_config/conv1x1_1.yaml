@@ -1,0 +1,5 @@
+in_channels: 192
+out_channels: 96
+kernel_size: 1
+stride: 1
+padding: 0

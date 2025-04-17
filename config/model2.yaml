@@ -1,0 +1,24 @@
+modules:
+  entry:
+    - data
+    - batch
+
+  module1:
+    cls: network1
+    inp_src:
+      - data
+
+  module2:
+    cls: network2
+    inp_src:
+      - module1
+      - batch
+  
+  module3:
+    cls: network3
+    inp_src:
+      - module2
+
+  exit:
+    out0: module2
+    out1: module3
