@@ -1,0 +1,63 @@
+name: TestModel
+modules:
+  entry:
+    - x
+
+  composable_model_1:
+    cls: ComposableModel
+    config:
+      name: inner_model_1
+      modules:
+        entry:
+          - x
+        conv1:
+          cls: torch.nn.Conv2d
+          config:
+            in_channels: 3
+            out_channels: 64
+            kernel_size: 3
+            stride: 1
+            padding: 1
+          inp_src:
+            - x
+        relu1:
+          cls: torch.nn.ReLU
+          config:
+            inplace: true
+          inp_src:
+            - conv1
+        exit:
+          - relu1
+    inp_src:
+      - x
+  
+  composable_model_2:
+    cls: ComposableModel
+    config:
+      name: inner_model_2
+      modules:
+        entry:
+          - x
+        conv1:
+          cls: torch.nn.Conv2d
+          config:
+            in_channels: 64
+            out_channels: 128
+            kernel_size: 3
+            stride: 1
+            padding: 1
+          inp_src:
+            - x
+        relu1:
+          cls: torch.nn.ReLU
+          config:
+            inplace: true
+          inp_src:
+            - conv1
+        exit:
+          - relu1
+    inp_src:
+      - composable_model_1
+  
+  exit:
+    - composable_model_2

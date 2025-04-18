@@ -15,6 +15,12 @@ import ReactFlow, {
   useReactFlow,
   Node,
   Edge,
+  XYPosition, // Added for potential future use, good practice
+  // Removed NodeMouseEvent import, will use type inference later
+  NodeChange, // Needed for onNodesChange
+  applyNodeChanges, // Needed for onNodesChange
+  EdgeChange, // Needed for onEdgesChange
+  applyEdgeChanges, // Needed for onEdgesChange
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 
@@ -47,8 +53,9 @@ interface NetworkVisualizerProps {
 }
 
 const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yamlUrl }) => {
-  const [nodes, setNodes, onNodesChange] = useNodesState([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+  // Removed useNodesState and useEdgesState hooks
+  const [nodes, setNodes] = useState<Node[]>([]);
+  const [edges, setEdges] = useState<Edge[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [showFolderDialog, setShowFolderDialog] = useState<boolean>(false);
@@ -56,9 +63,15 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
   const [folderFiles, setFolderFiles] = useState<string[]>([]);
   const [zipFile, setZipFile] = useState<File | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  
-  const [currentConfig, setCurrentConfig] = useState<YamlConfig | null>(null);
-  
+
+  // State for managing graph history (stack)
+  type GraphState = { nodes: Node[]; edges: Edge[]; config?: YamlConfig }; // Added optional config
+  const [historyStack, setHistoryStack] = useState<GraphState[]>([]);
+  const [currentGraphIndex, setCurrentGraphIndex] = useState<number>(-1);
+  // Cache for generated subgraphs to avoid re-computation
+  const [subgraphCache, setSubgraphCache] = useState<Record<string, GraphState>>({});
+  // Removed currentConfig state as it's now part of GraphState
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const reactFlowInstance = useReactFlow();
@@ -91,56 +104,101 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
       }
     };
   }, [reactFlowInstance]);
+
+  // Define basic node/edge change handlers
+  const onNodesChange = useCallback(
+    (changes: NodeChange[]) => setNodes((nds) => applyNodeChanges(changes, nds)),
+    [setNodes]
+  );
+
+  const onEdgesChange = useCallback(
+    (changes: EdgeChange[]) => setEdges((eds) => applyEdgeChanges(changes, eds)),
+    [setEdges]
+  );
+
+  // Helper function to create custom nodes/edges (moved from previous attempt)
+  const createGraphElements = (config: YamlConfig): { nodes: Node[], edges: Edge[] } => {
+    const { nodes: processedNodes, edges: processedEdges } = processNetworkStructure(config);
+    
+    const customNodes = processedNodes.map((node) => ({
+      ...node,
+      type: 'custom',
+      hidden: false, // Ensure nodes are visible by default
+    }));
+    
+    const customEdges = processedEdges.map((edge) => ({
+      ...edge,
+      type: 'custom',
+      hidden: false, // Ensure edges are visible by default
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
+        width: 15,
+        height: 15,
+        color: '#555',
+      },
+    }));
+    
+    return { nodes: customNodes, edges: customEdges };
+  };
   
   // Process the YAML configuration and update the visualization
-  const processConfig = useCallback((config: YamlConfig) => {
+  const processConfig = useCallback((config: YamlConfig, isInitialLoad: boolean = true) => { // Added isInitialLoad flag
     try {
       setError(null);
-      setCurrentConfig(config);
-      
-      // Process the network structure
-      const { nodes: processedNodes, edges: processedEdges } = processNetworkStructure(config);
-      
-      // Update the nodes with custom type
-      const customNodes = processedNodes.map((node) => ({
-        ...node,
-        type: 'custom',
-      }));
-      
-      // Update the edges with custom type and marker end
-      const customEdges = processedEdges.map((edge) => ({
-        ...edge,
-        type: 'custom',
-        markerEnd: {
-          type: MarkerType.ArrowClosed,
-          width: 15,
-          height: 15,
-          color: '#555',
-        },
-      }));
-      
-      // Set the nodes and edges
-      setNodes(customNodes);
-      setEdges(customEdges);
-      
+
+      const { nodes: newNodes, edges: newEdges } = createGraphElements(config);
+      const newGraphState: GraphState = { nodes: newNodes, edges: newEdges, config };
+
+      if (isInitialLoad) {
+        // Reset history and cache for a new file/content load
+        setHistoryStack([newGraphState]);
+        setCurrentGraphIndex(0);
+        setSubgraphCache({});
+        setNodes(newNodes); // Set initial nodes
+        setEdges(newEdges); // Set initial edges
+      } else {
+        // This case handles pushing a new subgraph onto the stack (used by double-click)
+        
+        // Hide the current graph's elements before adding the new one
+        // Note: We modify the *current* state's nodes/edges, not the ones in the stack directly
+        setNodes(nds => nds.map(n => ({ ...n, hidden: true })));
+        setEdges(eds => eds.map(e => ({ ...e, hidden: true })));
+
+        // Add the new graph state to the stack
+        const newStack = [...historyStack.slice(0, currentGraphIndex + 1), newGraphState];
+        setHistoryStack(newStack);
+        const newIndex = newStack.length - 1;
+        setCurrentGraphIndex(newIndex);
+
+        // Add the new nodes/edges to the existing (now hidden) ones
+        // Use functional updates to ensure we're working with the latest state
+        setNodes(nds => [...nds, ...newNodes]); 
+        setEdges(eds => [...eds, ...newEdges]);
+      }
+
       // Use a timeout to ensure nodes are properly rendered before fitting view
       setTimeout(() => {
         if (reactFlowInstance) {
           reactFlowInstance.fitView({ padding: 0.2, duration: 800 });
         }
       }, 300);
+
+      return newGraphState; // Return the newly created state for caching
+
     } catch (err) {
       setError(`Error processing network structure: ${(err as Error).message}`);
       console.error('Error processing network structure:', err);
+      return null; // Return null on error
     }
-  }, [reactFlowInstance, setNodes, setEdges]);
-  
+  // Corrected dependencies for processConfig
+  }, [reactFlowInstance, setNodes, setEdges, historyStack, currentGraphIndex, setHistoryStack, setCurrentGraphIndex, setSubgraphCache]); 
+
   // Load YAML content if provided
   useEffect(() => {
     if (yamlContent) {
       // Parse the YAML content via the backend API
       parseYamlContent(yamlContent)
-        .then(processConfig)
+        .then(config => processConfig(config, true)) // Ensure initial load
         .catch((err) => {
           setError(`Error parsing YAML content: ${err.message}`);
           console.error('Error parsing YAML content:', err);
@@ -153,13 +211,26 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
     if (yamlUrl) {
       // Fetch and parse the YAML file
       fetchYamlFile(yamlUrl)
-        .then(processConfig)
+        .then(config => processConfig(config, true)) // Ensure initial load
         .catch((err) => {
           setError(`Error fetching YAML from URL: ${err.message}`);
           console.error('Error fetching YAML from URL:', err);
         });
     }
   }, [yamlUrl, processConfig]);
+
+  // Upload and process the file (moved before handleFileChange)
+  const uploadAndProcessFile = useCallback((file: File, autoUploadReferences: boolean, isInitial: boolean = true) => { // Added isInitial flag
+    setFile(file);
+    
+    // Upload and process the file via the backend API
+    uploadYamlFile(file, autoUploadReferences)
+      .then(config => processConfig(config, isInitial)) // Pass isInitial
+      .catch((err) => {
+        setError(`Error processing YAML file: ${err.message}`);
+        console.error('Error processing YAML file:', err);
+      });
+  }, [processConfig, setError, setFile]); // Added dependencies
   
   // Handle single file selection
   const handleFileChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
@@ -169,9 +240,9 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
       setSelectedFile(newFile);
       
       // Upload the file directly without checking references
-      uploadAndProcessFile(newFile, false);
+      uploadAndProcessFile(newFile, false, true); // Ensure initial load
     }
-  }, []);
+  }, [uploadAndProcessFile]); 
   
   // Handle folder selection
   const handleFolderChange = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -205,22 +276,10 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
         console.error('Error processing folder:', err);
       }
     }
-  }, []);
+  // Corrected dependencies for handleFolderChange
+  }, [setError, setZipFile, setFolderFiles, setShowFolderDialog]); 
   
-  // Upload and process the file
-  const uploadAndProcessFile = useCallback((file: File, autoUploadReferences: boolean) => {
-    setFile(file);
-    
-    // Upload and process the file via the backend API
-    uploadYamlFile(file, autoUploadReferences)
-      .then(processConfig)
-      .catch((err) => {
-        setError(`Error processing YAML file: ${err.message}`);
-        console.error('Error processing YAML file:', err);
-      });
-  }, [processConfig]);
-  
-  // Handle file upload button click
+  // Handle file upload button click 
   const handleUploadClick = useCallback(() => {
     fileInputRef.current?.click();
   }, []);
@@ -237,13 +296,14 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
     if (zipFile && mainFile) {
       // Upload the folder
       uploadYamlFolder({ zipFile, mainFile })
-        .then(processConfig)
+        .then(config => processConfig(config, true)) // Ensure initial load
         .catch((err) => {
           setError(`Error processing YAML folder: ${err.message}`);
           console.error('Error processing YAML folder:', err);
         });
     }
-  }, [zipFile, mainFile, processConfig]);
+  // Corrected dependencies for handleConfirmFolder
+  }, [zipFile, mainFile, processConfig, setError, setShowFolderDialog]); 
   
   // Handle folder dialog cancellation
   const handleCancelFolder = useCallback(() => {
@@ -251,7 +311,8 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
     setZipFile(null);
     setFolderFiles([]);
     setMainFile('');
-  }, []);
+  // Corrected dependencies for handleCancelFolder
+  }, [setShowFolderDialog, setZipFile, setFolderFiles, setMainFile]); 
   
   // Handle edge connection
   const onConnect = useCallback(
@@ -274,6 +335,103 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
     },
     [setEdges]
   );
+
+  // Handle "Go Back" button click
+  const handleGoBack = useCallback(() => {
+    if (currentGraphIndex > 0) {
+      const previousIndex = currentGraphIndex - 1;
+      const previousGraphState = historyStack[previousIndex];
+
+      // Hide all currently visible nodes/edges before switching
+      // Note: This assumes nodes/edges from different levels are all in the state array
+      setNodes(nds => nds.map(n => ({ ...n, hidden: true })));
+      setEdges(eds => eds.map(e => ({ ...e, hidden: true })));
+
+      // Unhide the nodes/edges of the previous graph state
+      // We need to find these specific nodes/edges in the current state array and unhide them.
+      const previousNodeIds = new Set(previousGraphState.nodes.map(n => n.id));
+      const previousEdgeIds = new Set(previousGraphState.edges.map(e => e.id));
+
+      setNodes(nds => nds.map(n => previousNodeIds.has(n.id) ? { ...n, hidden: false } : n));
+      setEdges(eds => eds.map(e => previousEdgeIds.has(e.id) ? { ...e, hidden: false } : e));
+      
+      // Update the current index
+      setCurrentGraphIndex(previousIndex);
+
+      // Fit view for the previous graph
+      setTimeout(() => {
+        if (reactFlowInstance) {
+          // Fit view might need adjustment if nodes were added/removed, 
+          // but for now, just fit to the currently visible ones.
+          reactFlowInstance.fitView({ padding: 0.2, duration: 800 }); 
+        }
+      }, 300);
+    }
+  }, [currentGraphIndex, historyStack, setNodes, setEdges, setCurrentGraphIndex, reactFlowInstance]);
+
+  // Handle node double-click for expanding ComposableModels
+  const onNodeDoubleClick = useCallback(
+    (event: React.MouseEvent, node: Node<ModuleNodeData>) => {
+      // Check if it's a ComposableModel with a config
+      if (node.type === 'custom' && node.data?.module_type === 'ComposableModel' && node.data?.config) {
+        const subgraphConfig = node.data.config as YamlConfig; // Type assertion
+        const cacheKey = node.id; // Use node ID as the cache key
+
+        // Check if this subgraph is already cached
+        if (subgraphCache[cacheKey]) {
+          console.log(`Using cached subgraph for node ${node.id}`);
+          const cachedState = subgraphCache[cacheKey];
+
+          // Hide current graph elements
+          setNodes(nds => nds.map(n => ({ ...n, hidden: true })));
+          setEdges(eds => eds.map(e => ({ ...e, hidden: true })));
+
+          // Add the cached (visible) elements
+          setNodes(nds => [...nds, ...cachedState.nodes.map(n => ({ ...n, hidden: false }))]);
+          setEdges(eds => [...eds, ...cachedState.edges.map(e => ({ ...e, hidden: false }))]);
+
+          // Update history stack
+          const newStack = [...historyStack.slice(0, currentGraphIndex + 1), cachedState];
+          setHistoryStack(newStack);
+          const newIndex = newStack.length - 1;
+          setCurrentGraphIndex(newIndex);
+
+          // Fit view after state update
+          setTimeout(() => {
+            if (reactFlowInstance) {
+              reactFlowInstance.fitView({ padding: 0.2, duration: 800 });
+            }
+          }, 300);
+
+        } else {
+          console.log(`Generating new subgraph for node ${node.id}`);
+          // Not cached, process the config to generate and display the subgraph
+          // Pass false for isInitialLoad to trigger history push and hiding logic
+          const newlyGeneratedState = processConfig(subgraphConfig, false);
+
+          // Cache the newly generated state if it was created successfully
+          if (newlyGeneratedState) {
+             setSubgraphCache(cache => ({ 
+               ...cache, 
+               [cacheKey]: newlyGeneratedState 
+             }));
+          }
+        }
+      }
+    },
+    [
+      processConfig, 
+      subgraphCache, 
+      setNodes, 
+      setEdges, 
+      historyStack, 
+      currentGraphIndex, 
+      setHistoryStack,
+      setCurrentGraphIndex,
+      reactFlowInstance,
+      setSubgraphCache 
+    ]
+  );
   
   // Reset the view to fit all nodes
   const resetView = useCallback(() => {
@@ -292,6 +450,7 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
+        onNodeDoubleClick={onNodeDoubleClick} // Pass the handler
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         fitView
@@ -359,6 +518,23 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
             >
               Reset View
             </button>
+            {/* Add Go Back button, only visible when not at the root level */}
+            {currentGraphIndex > 0 && (
+              <button
+                onClick={handleGoBack}
+                style={{
+                  marginTop: '10px', // Add some space
+                  padding: '8px 12px',
+                  backgroundColor: '#ffc107', // Use a distinct color
+                  color: 'black',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                }}
+              >
+                Go Back
+              </button>
+            )}
           </div>
         </Panel>
         

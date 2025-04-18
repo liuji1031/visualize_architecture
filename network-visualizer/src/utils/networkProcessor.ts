@@ -22,9 +22,10 @@ export const processNetworkStructure = (config: YamlConfig): NetworkStructure =>
     
     // Handle different module data formats
     let cls: string | undefined;
+    let module_type: string | undefined; // Added module_type
     let outNum = 1;
     let inputSources: string[] | Record<string, string> | undefined;
-    let config: Record<string, any> | string | undefined;
+    let configData: Record<string, any> | string | undefined; // Renamed to avoid conflict with config var name
     
     if (isEntry) {
       // Entry module has inputs directly as an array
@@ -36,11 +37,15 @@ export const processNetworkStructure = (config: YamlConfig): NetworkStructure =>
       // Regular module with YamlModule structure
       const regularModule = moduleData as YamlModule;
       cls = regularModule.cls;
+      // Set module_type based on cls
+      if (cls === 'ComposableModel') {
+        module_type = 'ComposableModel';
+      }
       outNum = regularModule.out_num || 1;
       inputSources = regularModule.inp_src;
-      config = regularModule.config;
+      configData = regularModule.config; // Use renamed variable
     }
-    
+
     return {
       id: moduleName,
       type: isEntry ? 'input' : isExit ? 'output' : 'default',
@@ -48,11 +53,12 @@ export const processNetworkStructure = (config: YamlConfig): NetworkStructure =>
       data: {
         label: moduleName,
         cls,
+        module_type, // Add module_type to node data
         isEntry,
         isExit,
         outNum,
         inputSources, // Include input sources information
-        config // Include configuration parameters
+        config: configData // Use renamed variable
       }
     };
   });

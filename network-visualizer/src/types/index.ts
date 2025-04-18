@@ -19,6 +19,7 @@ export interface ModuleNodeData {
   cls?: string;
   isEntry?: boolean;
   isExit?: boolean;
+  module_type?: string; // Added to store the type like 'ComposableModel'
   outNum?: number;
   inputSources?: string[] | Record<string, string>; // Add input sources information
   config?: Record<string, any> | string; // Configuration parameters for the module or path to config file
