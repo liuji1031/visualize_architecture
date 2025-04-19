@@ -5,8 +5,8 @@ import ReactFlow, {
   Controls,
   Background,
   Panel,
-  useNodesState,
-  useEdgesState,
+  useNodesState, // Reintroduced
+  useEdgesState, // Reintroduced
   addEdge,
   Connection,
   NodeTypes,
@@ -17,13 +17,14 @@ import ReactFlow, {
   Edge,
   XYPosition, // Added for potential future use, good practice
   // Removed NodeMouseEvent import, will use type inference later
-  NodeChange, // Needed for onNodesChange
-  applyNodeChanges, // Needed for onNodesChange
-  EdgeChange, // Needed for onEdgesChange
-  applyEdgeChanges, // Needed for onEdgesChange
+  NodeChange, // Needed for onNodesChange (provided by hook)
+  // applyNodeChanges, // No longer needed directly if using hook's handler
+  EdgeChange, // Needed for onEdgesChange (provided by hook)
+  // applyEdgeChanges, // No longer needed directly if using hook's handler
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 
+// Reintroduce useNodesState and useEdgesState (Comment redundant)
 import { YamlConfig, ModuleNodeData } from '../types';
 import { 
   parseYamlContent, 
@@ -34,7 +35,8 @@ import {
   uploadYamlFolder,
   UploadFolderOptions
 } from '../services/api';
-import { processNetworkStructure } from '../utils/networkProcessor';
+// Import layout constants
+import { processNetworkStructure, NODE_WIDTH, HORIZONTAL_SPACING } from '../utils/networkProcessor'; 
 import CustomNode from './CustomNode';
 import CustomEdge from './CustomEdge';
 
@@ -53,9 +55,9 @@ interface NetworkVisualizerProps {
 }
 
 const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yamlUrl }) => {
-  // Removed useNodesState and useEdgesState hooks
-  const [nodes, setNodes] = useState<Node[]>([]);
-  const [edges, setEdges] = useState<Edge[]>([]);
+  // Reintroduce useNodesState and useEdgesState hooks
+  const [nodes, setNodes, onNodesChange] = useNodesState([]); // Use hook
+  const [edges, setEdges, onEdgesChange] = useEdgesState([]); // Use hook
   const [error, setError] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [showFolderDialog, setShowFolderDialog] = useState<boolean>(false);
@@ -105,16 +107,7 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
     };
   }, [reactFlowInstance]);
 
-  // Define basic node/edge change handlers
-  const onNodesChange = useCallback(
-    (changes: NodeChange[]) => setNodes((nds) => applyNodeChanges(changes, nds)),
-    [setNodes]
-  );
-
-  const onEdgesChange = useCallback(
-    (changes: EdgeChange[]) => setEdges((eds) => applyEdgeChanges(changes, eds)),
-    [setEdges]
-  );
+  // onNodesChange and onEdgesChange are now provided by the hooks
 
   // Helper function to create custom nodes/edges (moved from previous attempt)
   const createGraphElements = (config: YamlConfig): { nodes: Node[], edges: Edge[] } => {
@@ -142,11 +135,44 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
   };
   
   // Process the YAML configuration and update the visualization
-  const processConfig = useCallback((config: YamlConfig, isInitialLoad: boolean = true) => { // Added isInitialLoad flag
+  // Added parentNodePosition optional parameter
+  const processConfig = useCallback((
+    config: YamlConfig, 
+    isInitialLoad: boolean = true, 
+    parentNodePosition?: XYPosition 
+  ) => { 
     try {
       setError(null);
 
-      const { nodes: newNodes, edges: newEdges } = createGraphElements(config);
+      // 1. Generate subgraph elements (positions are relative to subgraph)
+      let { nodes: newNodes, edges: newEdges } = createGraphElements(config);
+      
+      // 2. Apply offset if expanding a node (not initial load)
+      if (!isInitialLoad && parentNodePosition) {
+        // Simple offset: Place subgraph to the right of the parent node
+        // TODO: A more sophisticated approach might calculate the bounding box 
+        // of newNodes and center it relative to the parent.
+        // Use imported constants
+        const offsetX = parentNodePosition.x + NODE_WIDTH + HORIZONTAL_SPACING / 2; 
+        const offsetY = parentNodePosition.y; 
+
+        newNodes = newNodes.map(node => ({
+          ...node,
+          position: {
+            x: node.position.x + offsetX,
+            y: node.position.y + offsetY,
+          },
+          hidden: false, // Ensure new nodes are visible
+        }));
+        // Ensure new edges are also visible
+        newEdges = newEdges.map(edge => ({ ...edge, hidden: false }));
+      } else {
+         // Ensure nodes/edges are visible on initial load too
+         newNodes = newNodes.map(node => ({ ...node, hidden: false }));
+         newEdges = newEdges.map(edge => ({ ...edge, hidden: false }));
+      }
+
+      // 3. Create the new graph state with *offset* nodes
       const newGraphState: GraphState = { nodes: newNodes, edges: newEdges, config };
 
       if (isInitialLoad) {
@@ -154,34 +180,22 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
         setHistoryStack([newGraphState]);
         setCurrentGraphIndex(0);
         setSubgraphCache({});
-        setNodes(newNodes); // Set initial nodes
-        setEdges(newEdges); // Set initial edges
-      } else {
-        // This case handles pushing a new subgraph onto the stack (used by double-click)
+        setNodes(newNodes); // Set initial nodes using hook setter
+        setEdges(newEdges); // Set initial edges using hook setter
         
-        // Hide the current graph's elements before adding the new one
-        // Note: We modify the *current* state's nodes/edges, not the ones in the stack directly
-        setNodes(nds => nds.map(n => ({ ...n, hidden: true })));
-        setEdges(eds => eds.map(e => ({ ...e, hidden: true })));
+        // Initial fitView call after setting initial nodes/edges
+        setTimeout(() => {
+          if (reactFlowInstance) {
+            reactFlowInstance.fitView({ padding: 0.2, duration: 800 });
+          }
+        }, 300);
 
-        // Add the new graph state to the stack
-        const newStack = [...historyStack.slice(0, currentGraphIndex + 1), newGraphState];
-        setHistoryStack(newStack);
-        const newIndex = newStack.length - 1;
-        setCurrentGraphIndex(newIndex);
+      } 
+      // NOTE: The 'else' block for handling expansion state updates is removed.
+      // State updates (setNodes/setEdges) will now happen directly in onNodeDoubleClick.
+      // processConfig now primarily focuses on generating the *target* graph state.
 
-        // Add the new nodes/edges to the existing (now hidden) ones
-        // Use functional updates to ensure we're working with the latest state
-        setNodes(nds => [...nds, ...newNodes]); 
-        setEdges(eds => [...eds, ...newEdges]);
-      }
-
-      // Use a timeout to ensure nodes are properly rendered before fitting view
-      setTimeout(() => {
-        if (reactFlowInstance) {
-          reactFlowInstance.fitView({ padding: 0.2, duration: 800 });
-        }
-      }, 300);
+      // Removed the fitView call from here. View centering/fitting is handled elsewhere.
 
       return newGraphState; // Return the newly created state for caching
 
@@ -190,8 +204,8 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
       console.error('Error processing network structure:', err);
       return null; // Return null on error
     }
-  // Corrected dependencies for processConfig
-  }, [reactFlowInstance, setNodes, setEdges, historyStack, currentGraphIndex, setHistoryStack, setCurrentGraphIndex, setSubgraphCache]); 
+      // Corrected dependencies for processConfig
+  }, [reactFlowInstance, setNodes, setEdges, historyStack, currentGraphIndex, setHistoryStack, setCurrentGraphIndex, setSubgraphCache]); // setNodes/setEdges from hook
 
   // Load YAML content if provided
   useEffect(() => {
@@ -333,7 +347,7 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
         )
       );
     },
-    [setEdges]
+    [setEdges] // setEdges from hook
   );
 
   // Handle "Go Back" button click
@@ -341,19 +355,10 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
     if (currentGraphIndex > 0) {
       const previousIndex = currentGraphIndex - 1;
       const previousGraphState = historyStack[previousIndex];
-
-      // Hide all currently visible nodes/edges before switching
-      // Note: This assumes nodes/edges from different levels are all in the state array
-      setNodes(nds => nds.map(n => ({ ...n, hidden: true })));
-      setEdges(eds => eds.map(e => ({ ...e, hidden: true })));
-
-      // Unhide the nodes/edges of the previous graph state
-      // We need to find these specific nodes/edges in the current state array and unhide them.
-      const previousNodeIds = new Set(previousGraphState.nodes.map(n => n.id));
-      const previousEdgeIds = new Set(previousGraphState.edges.map(e => e.id));
-
-      setNodes(nds => nds.map(n => previousNodeIds.has(n.id) ? { ...n, hidden: false } : n));
-      setEdges(eds => eds.map(e => previousEdgeIds.has(e.id) ? { ...e, hidden: false } : e));
+      
+      // Directly replace state with the previous graph's elements
+      setNodes(previousGraphState.nodes); // Use hook setter
+      setEdges(previousGraphState.edges); // Use hook setter
       
       // Update the current index
       setCurrentGraphIndex(previousIndex);
@@ -367,7 +372,7 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
         }
       }, 300);
     }
-  }, [currentGraphIndex, historyStack, setNodes, setEdges, setCurrentGraphIndex, reactFlowInstance]);
+  }, [currentGraphIndex, historyStack, setNodes, setEdges, setCurrentGraphIndex, reactFlowInstance]); // setNodes/setEdges from hook
 
   // Handle node double-click for expanding ComposableModels
   const onNodeDoubleClick = useCallback(
@@ -377,60 +382,81 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
         const subgraphConfig = node.data.config as YamlConfig; // Type assertion
         const cacheKey = node.id; // Use node ID as the cache key
 
-        // Check if this subgraph is already cached
-        if (subgraphCache[cacheKey]) {
-          console.log(`Using cached subgraph for node ${node.id}`);
-          const cachedState = subgraphCache[cacheKey];
-
-          // Hide current graph elements
-          setNodes(nds => nds.map(n => ({ ...n, hidden: true })));
-          setEdges(eds => eds.map(e => ({ ...e, hidden: true })));
-
-          // Add the cached (visible) elements
-          setNodes(nds => [...nds, ...cachedState.nodes.map(n => ({ ...n, hidden: false }))]);
-          setEdges(eds => [...eds, ...cachedState.edges.map(e => ({ ...e, hidden: false }))]);
-
-          // Update history stack
-          const newStack = [...historyStack.slice(0, currentGraphIndex + 1), cachedState];
-          setHistoryStack(newStack);
-          const newIndex = newStack.length - 1;
-          setCurrentGraphIndex(newIndex);
-
-          // Fit view after state update
-          setTimeout(() => {
-            if (reactFlowInstance) {
-              reactFlowInstance.fitView({ padding: 0.2, duration: 800 });
-            }
-          }, 300);
-
-        } else {
-          console.log(`Generating new subgraph for node ${node.id}`);
-          // Not cached, process the config to generate and display the subgraph
-          // Pass false for isInitialLoad to trigger history push and hiding logic
-          const newlyGeneratedState = processConfig(subgraphConfig, false);
-
-          // Cache the newly generated state if it was created successfully
-          if (newlyGeneratedState) {
-             setSubgraphCache(cache => ({ 
-               ...cache, 
-               [cacheKey]: newlyGeneratedState 
-             }));
-          }
+        // Center view on the clicked node *before* processing/adding subgraph
+        if (reactFlowInstance) {
+          reactFlowInstance.fitView({ nodes: [{ id: node.id }], padding: 0.2, duration: 400 });
         }
+
+        // Use a short delay to allow fitView animation to start before heavy processing
+        setTimeout(() => {
+          // Check if this subgraph is already cached
+          if (subgraphCache[cacheKey]) {
+            console.log(`Using cached subgraph for node ${node.id}`);
+            const cachedState = subgraphCache[cacheKey];
+
+            // Update history stack
+            const newStack = [...historyStack.slice(0, currentGraphIndex + 1), cachedState];
+            setHistoryStack(newStack);
+            const newIndex = newStack.length - 1;
+            setCurrentGraphIndex(newIndex);
+            
+            // Directly set state to the cached subgraph
+            setNodes(cachedState.nodes); // Use hook setter
+            setEdges(cachedState.edges); // Use hook setter
+
+            // Fit view to the cached subgraph nodes after state update
+            setTimeout(() => {
+              if (reactFlowInstance) {
+                reactFlowInstance.fitView({ nodes: cachedState.nodes.map(n => ({ id: n.id })), padding: 0.2, duration: 400 });
+              }
+            }, 0); // Execute immediately after state update cycle
+
+          } else {
+            console.log(`Generating new subgraph for node ${node.id}`);
+            // Not cached, process the config to generate the subgraph state
+            // Pass false for isInitialLoad and the parent node's position
+            const newlyGeneratedState = processConfig(subgraphConfig, false, node.position);
+
+            if (newlyGeneratedState) {
+              // Cache the newly generated state
+               setSubgraphCache(cache => ({ 
+                 ...cache, 
+                 [cacheKey]: newlyGeneratedState 
+               }));
+               
+               // Update history stack
+               const newStack = [...historyStack.slice(0, currentGraphIndex + 1), newlyGeneratedState];
+               setHistoryStack(newStack);
+               const newIndex = newStack.length - 1;
+               setCurrentGraphIndex(newIndex);
+
+               // Directly set state to the new subgraph
+               setNodes(newlyGeneratedState.nodes); // Use hook setter
+               setEdges(newlyGeneratedState.edges); // Use hook setter
+
+               // Fit view to the newly generated subgraph nodes after state update
+               setTimeout(() => {
+                 if (reactFlowInstance) {
+                   reactFlowInstance.fitView({ nodes: newlyGeneratedState.nodes.map(n => ({ id: n.id })), padding: 0.2, duration: 400 });
+                 }
+               }, 0); // Execute immediately after state update cycle
+            }
+          }
+        }, 100); // Delay processing slightly after starting fitView (to allow parent centering animation)
       }
     },
-    [
+    [ // Corrected dependency array
       processConfig, 
       subgraphCache, 
-      setNodes, 
-      setEdges, 
+      setNodes, // Use hook setter
+      setEdges, // Use hook setter
       historyStack, 
       currentGraphIndex, 
       setHistoryStack,
       setCurrentGraphIndex,
       reactFlowInstance,
       setSubgraphCache 
-    ]
+    ] // setNodes/setEdges from hook
   );
   
   // Reset the view to fit all nodes
@@ -447,13 +473,13 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
       <ReactFlow
         nodes={nodes}
         edges={edges}
-        onNodesChange={onNodesChange}
-        onEdgesChange={onEdgesChange}
+        onNodesChange={onNodesChange} // Use handler from hook
+        onEdgesChange={onEdgesChange} // Use handler from hook
         onConnect={onConnect}
         onNodeDoubleClick={onNodeDoubleClick} // Pass the handler
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
-        fitView
+        // Removed fitView prop to rely on manual fitView calls
         nodesDraggable
         elementsSelectable
       >

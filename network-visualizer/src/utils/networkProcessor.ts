@@ -1,11 +1,11 @@
 import dagre from 'dagre';
 import { YamlConfig, NetworkStructure, YamlModule } from '../types';
 
-// Constants for layout
-const NODE_WIDTH = 200;
-const NODE_HEIGHT = 100;
-const HORIZONTAL_SPACING = 250;
-const VERTICAL_SPACING = 150;
+// Constants for layout (Exported)
+export const NODE_WIDTH = 200;
+export const NODE_HEIGHT = 100; // Not currently used in NetworkVisualizer, but good to export if needed later
+export const HORIZONTAL_SPACING = 250;
+export const VERTICAL_SPACING = 150; // Not currently used in NetworkVisualizer
 
 /**
  * Process the YAML configuration into a network structure for ReactFlow
