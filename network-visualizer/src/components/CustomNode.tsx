@@ -60,12 +60,15 @@ const tooltipStyles: React.CSSProperties = {
   wordBreak: 'break-word'
 };
 
-interface CustomNodeProps extends NodeProps<ModuleNodeData> {}
+interface CustomNodeProps extends NodeProps<ModuleNodeData> {
+  onNodeDoubleClick?: (nodeId: string, configPath: string) => void; // Add callback prop
+}
 
-const CustomNode: React.FC<CustomNodeProps> = ({ data, isConnectable, id }) => {
+const CustomNode: React.FC<CustomNodeProps> = ({ data, isConnectable, id, ...props }) => { // Destructure props to get onNodeDoubleClick
   const { label, cls, isEntry, isExit, outNum = 1, config } = data;
   const [showTooltip, setShowTooltip] = useState(false);
-  
+  const { onNodeDoubleClick } = props; // Get the callback from props
+
   // Determine node type for styling
   const nodeType = isEntry ? 'entry' : isExit ? 'exit' : 'default';
   
@@ -390,12 +393,20 @@ const CustomNode: React.FC<CustomNodeProps> = ({ data, isConnectable, id }) => {
         .join('\n');
     }
   };
+
+  // Handle double click for ComposableModel nodes with config paths
+  const handleDoubleClick = useCallback(() => {
+    if (onNodeDoubleClick && cls === 'ComposableModel' && typeof config === 'string') {
+      onNodeDoubleClick(id, config);
+    }
+  }, [id, cls, config, onNodeDoubleClick]);
   
   return (
     <div 
       style={style}
       onMouseEnter={() => setShowTooltip(true)}
       onMouseLeave={() => setShowTooltip(false)}
+      onDoubleClick={handleDoubleClick} // Add double click handler
       data-testid={`node-${id}`}
     >
       <div style={{ 

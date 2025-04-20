@@ -5,7 +5,7 @@ modules:
 
   inception_1:
     cls: ComposableModel
-    config: inception_block.yaml
+    config: block.yaml
     inp_src:
       - x
   

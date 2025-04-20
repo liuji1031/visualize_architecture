@@ -120,6 +120,7 @@ export const uploadYamlFolder = async (options: UploadFolderOptions): Promise<Ya
     const response = await fetch(`${API_BASE_URL}/yaml/upload-folder`, {
       method: 'POST',
       body: formData,
+      credentials: 'include', // Ensure session cookies are sent
     });
 
     if (!response.ok) {
@@ -138,23 +139,69 @@ export const uploadYamlFolder = async (options: UploadFolderOptions): Promise<Ya
  * @param url - URL of the YAML file
  * @returns Promise resolving to parsed YAML configuration
  */
+// Note: The backend route /api/yaml/fetch was renamed to /api/yaml/get-subgraph
+// and now works with relative paths in a session context.
+// This function uses the original /fetch endpoint, assuming it's for external URLs.
+// The /get-subgraph endpoint is used for relative paths within session context.
 export const fetchYamlFile = async (url: string): Promise<YamlConfig> => {
   try {
+    // Point back to the original /fetch endpoint for external URLs
     const response = await fetch(`${API_BASE_URL}/yaml/fetch`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
+      // Send the URL as 'url'
       body: JSON.stringify({ url }),
     });
 
     if (!response.ok) {
-      throw new Error(`Failed to fetch YAML file: ${response.statusText}`);
+       const errorData = await response.json().catch(() => ({})); // Try to get error details
+      throw new Error(`Failed to fetch YAML file from URL (${response.status} ${response.statusText}): ${errorData.error || 'Unknown error'}`);
     }
 
     return await response.json();
   } catch (error) {
     console.error('Error fetching YAML file:', error);
-    throw error;
+    // Re-throw the original error which might have more context
+    throw error instanceof Error ? error : new Error(String(error));
+  }
+};
+
+/**
+ * Fetch subgraph configuration using a relative path (within session context)
+ * @param relativePath - Relative path within the uploaded folder context
+ * @returns Promise resolving to parsed YAML configuration
+ */
+export const getSubgraphConfig = async (relativePath: string): Promise<YamlConfig> => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/yaml/get-subgraph`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      // Send relativePath in the body
+      body: JSON.stringify({ relativePath }),
+      credentials: 'include', // Ensure session cookies are sent
+    });
+
+    if (!response.ok) {
+       const errorData = await response.json().catch(() => ({})); // Try to get error details
+      // Provide a more specific error message based on status
+      let errorMessage = `Failed to get subgraph config (${response.status} ${response.statusText})`;
+      if (errorData.error) {
+        errorMessage += `: ${errorData.error}`;
+      }
+      if (response.status === 400 && errorData.error?.includes("No active upload context")) {
+         errorMessage += " Please upload the folder again.";
+      }
+      throw new Error(errorMessage);
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('Error getting subgraph config:', error);
+     // Re-throw the original error which might have more context
+    throw error instanceof Error ? error : new Error(String(error));
   }
 };
