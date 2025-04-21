@@ -16,6 +16,32 @@ const nodeStyles: React.CSSProperties = {
   opacity: 1
 };
 
+// Function to generate a consistent hash from a string
+const hashString = (str: string): number => {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32bit integer
+  }
+  return Math.abs(hash);
+};
+
+// Function to generate a color based on a class name
+const generateColorFromCls = (cls: string): string => {
+  const hash = hashString(cls);
+  
+  // Use HSL color model for better control over saturation and lightness
+  // Hue: 0-360 (full color spectrum)
+  // Saturation: 25-45% (not too saturated)
+  // Lightness: 75-85% (light enough for text readability)
+  const hue = hash % 360;
+  const saturation = 50 + (hash % 20); // 50-70%
+  const lightness = 75 + (hash % 10); // 75-85%
+  
+  return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+};
+
 // Different styles for different node types
 const nodeTypeStyles = {
   entry: {
@@ -23,7 +49,7 @@ const nodeTypeStyles = {
     borderColor: '#949494'
   },
   exit: {
-    backgroundColor: '#d0c6f5',
+    backgroundColor: '#ffc891',
     borderColor: '#949494'
   },
   default: {
@@ -72,6 +98,24 @@ const CustomNode: React.FC<CustomNodeProps> = ({ data, isConnectable, id, ...pro
   // Determine node type for styling
   const nodeType = isEntry ? 'entry' : isExit ? 'exit' : 'default';
   
+  // Generate style based on cls for non-entry/exit nodes
+  let nodeStyle = nodeTypeStyles[nodeType];
+  if (!isEntry && !isExit && cls) {
+    if (cls === 'ComposableModel') {
+      // Use specific color for ComposableModel nodes
+      nodeStyle = {
+        ...nodeTypeStyles.default,
+        backgroundColor: '#b8a6ed'
+      };
+    } else {
+      // For other nodes, use the color generated from cls
+      nodeStyle = {
+        ...nodeTypeStyles.default,
+        backgroundColor: generateColorFromCls(cls)
+      };
+    }
+  }
+  
   // Calculate the number of input and output handles
   let inputCount = 0;
   let outputCount = 0;
@@ -109,7 +153,7 @@ const CustomNode: React.FC<CustomNodeProps> = ({ data, isConnectable, id, ...pro
   // Create the style with dynamic height
   const style = { 
     ...nodeStyles, 
-    ...nodeTypeStyles[nodeType],
+    ...nodeStyle,
     height: `${nodeHeight}px`
   };
   

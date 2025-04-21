@@ -7,11 +7,14 @@ import shutil
 import zipfile
 import io
 import glob # Added for file searching
+import yaml # Import yaml for parsing
+
 from ..services.yaml_service import (
     parse_yaml_content,
     process_yaml_file, # Ensure this is imported
     fetch_yaml_file,
-    find_all_config_references
+    find_all_config_references,
+    find_config_references # Import find_config_references
 )
 
 # Create a blueprint for YAML routes
@@ -97,10 +100,70 @@ def check_references():
                  print(f"Error cleaning up temp file {file_path}: {cleanup_error}")
 
 
+def copy_referenced_files(file_path, temp_dir, project_root=None):
+    """
+    Find all referenced files in a YAML file and copy them to the temporary directory.
+    
+    Args:
+        file_path: Path to the YAML file
+        temp_dir: Temporary directory to copy files to
+        project_root: Root directory of the project to search for referenced files
+        
+    Returns:
+        List of files that couldn't be found
+    """
+    try:
+        # Get the base path for resolving relative paths
+        base_path = os.path.dirname(file_path)
+        
+        # Read the YAML file
+        with open(file_path, 'r') as f:
+            content = f.read()
+            
+        # Parse the YAML content
+        config = yaml.safe_load(content)
+        
+        # Find all referenced files
+        references = find_config_references(config, base_path)
+        
+        missing_files = []
+        
+        # Copy each referenced file to the temporary directory
+        for module_name, ref_path in references:
+            # Get the relative path from the reference
+            if os.path.exists(ref_path):
+                # Determine the relative path within the project
+                if project_root and ref_path.startswith(project_root):
+                    rel_path = os.path.relpath(ref_path, project_root)
+                else:
+                    # If we can't determine a clean relative path, use the filename
+                    rel_path = os.path.basename(ref_path)
+                
+                # Create the target directory in the temp dir
+                target_dir = os.path.dirname(os.path.join(temp_dir, rel_path))
+                os.makedirs(target_dir, exist_ok=True)
+                
+                # Copy the file
+                target_path = os.path.join(temp_dir, rel_path)
+                shutil.copy2(ref_path, target_path)
+                print(f"Copied referenced file: {ref_path} -> {target_path}")
+                
+                # Recursively copy referenced files from this file
+                nested_missing = copy_referenced_files(target_path, temp_dir, project_root)
+                missing_files.extend(nested_missing)
+            else:
+                print(f"Warning: Referenced file not found: {ref_path}")
+                missing_files.append((module_name, ref_path))
+                
+        return missing_files
+    except Exception as e:
+        print(f"Error copying referenced files: {e}")
+        return []
+
 @yaml_bp.route('/upload', methods=['POST'])
 def upload():
     """
-    Upload and process a YAML file. (No session context created here)
+    Upload and process a YAML file with improved handling of references.
 
     Request body:
         file: YAML file to upload
@@ -117,47 +180,91 @@ def upload():
     if file.filename == '':
         return jsonify({'error': 'No file selected'}), 400
 
-    # Check if auto_upload_references is enabled (currently unused in processing)
-    # auto_upload_references = request.form.get('auto_upload_references', 'false').lower() == 'true'
+    # Check if auto_upload_references is enabled
+    auto_upload_references = request.form.get('auto_upload_references', 'true').lower() == 'true'
 
-    file_path = None # Initialize file_path
+    temp_dir = None  # Initialize temp_dir
+    file_path = None  # Initialize file_path
     try:
-        # Save the file to a temporary location
-        filename = secure_filename(file.filename)
-        temp_dir = tempfile.gettempdir() # Use system default temp dir
-        file_path = os.path.join(temp_dir, filename)
+        # Create a temporary directory for this upload
+        temp_dir = tempfile.mkdtemp()
+        print(f"Created temporary directory for upload: {temp_dir}")
+        
+        # Get the original filename
+        original_filename = secure_filename(file.filename)
+        
+        # Save the file to the temporary directory
+        file_path = os.path.join(temp_dir, original_filename)
         file.save(file_path)
-
+        print(f"Saved uploaded file to: {file_path}")
+        
+        # If auto_upload_references is enabled, try to find and copy referenced files
+        missing_references = []
+        if auto_upload_references:
+            # Try to find the project root directory
+            project_root = os.getcwd()  # Default to current working directory
+            
+            # Look for the file in the project directory
+            for root, dirs, files in os.walk(project_root):
+                for name in files:
+                    if name == original_filename:
+                        found_path = os.path.join(root, name)
+                        # If we found the file in the project, use its directory as base
+                        if os.path.exists(found_path):
+                            print(f"Found matching file in project: {found_path}")
+                            # Copy referenced files
+                            missing_references = copy_referenced_files(file_path, temp_dir, project_root)
+                            break
+                if missing_references:  # Break outer loop if we've processed references
+                    break
+        
         print(f"Processing uploaded YAML file: {file_path}")
-
-        # Process the YAML file (root_temp_dir is None here)
-        config = process_yaml_file(file_path)
-
+        
+        # Process the YAML file with the temp_dir as root_temp_dir
+        config = process_yaml_file(file_path, root_temp_dir=temp_dir)
+        
         # Check for embedded errors
         processing_errors = []
         if isinstance(config, dict) and 'modules' in config:
             for module_name, module_data in config['modules'].items():
-                 if isinstance(module_data, dict) and isinstance(module_data.get('config'), dict) and 'error' in module_data['config']:
-                      processing_errors.append({
-                          'module': module_name,
-                          'error': module_data['config']['error']
-                      })
+                if isinstance(module_data, dict) and isinstance(module_data.get('config'), dict) and 'error' in module_data['config']:
+                    processing_errors.append({
+                        'module': module_name,
+                        'error': module_data['config']['error']
+                    })
+        
+        # Add missing references to processing errors
+        for module_name, ref_path in missing_references:
+            processing_errors.append({
+                'module': module_name,
+                'error': f"Referenced file not found: {ref_path}"
+            })
+        
         if processing_errors:
-             return jsonify({'error': 'Errors occurred during YAML processing.', 'details': processing_errors}), 422
-
-
+            print(f"Found errors during processing: {processing_errors}")
+            return jsonify({'error': 'Errors occurred during YAML processing.', 'details': processing_errors}), 422
+        
+        # Store the temp directory in the session for future reference
+        print(f"Attempting to set session['upload_temp_dir'] = {temp_dir}")
+        session['upload_temp_dir'] = temp_dir
+        print(f"Stored temp_dir in session after successful processing.")
+        
         return jsonify(config)
     except Exception as e:
         error_message = f"Error processing YAML file: {str(e)}"
-        print(error_message)
-        return jsonify({'error': error_message}), 500
-    finally:
-         # Clean up the temporary file
-        if file_path and os.path.exists(file_path):
+        # Log the full traceback for detailed debugging
+        tb_str = traceback.format_exc()
+        print(f"{error_message}\nTraceback:\n{tb_str}")
+        
+        # Clean up the temporary directory on error
+        if temp_dir and os.path.exists(temp_dir):
             try:
-                os.remove(file_path)
+                shutil.rmtree(temp_dir)
+                print(f"Cleaned up temp_dir {temp_dir} after error.")
             except Exception as cleanup_error:
-                 print(f"Error cleaning up temp file {file_path}: {cleanup_error}")
+                print(f"Error cleaning up temp_dir {temp_dir} after error: {cleanup_error}")
+        
+        return jsonify({'error': error_message}), 500
 
 
 @yaml_bp.route('/upload-folder', methods=['POST'])

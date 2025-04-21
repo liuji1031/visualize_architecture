@@ -237,9 +237,9 @@ def resolve_config_references(config: Dict[str, Any], base_path: str = '', root_
 
             # *** If not ComposableModel, proceed to read and parse the file using the RESOLVED path ***
             if not found_path_in_resolve:
-                # If path wasn't resolved for a non-composable model, set error state
+                # If path wasn't resolved for a non-composable model, log an error, and skip
                 print(f"Error: Config path '{original_config_path_str}' for non-ComposableModel module {module_name} could not be resolved to an existing file.")
-                module_data['config'] = {'error': f"Config file not found: {original_config_path_str}"}
+                print(f"Skipping reading of config file {original_config_path_str} for module {module_name}.")
                 continue # Skip processing this module further
 
             # Path was resolved and it's not a ComposableModel, proceed with reading

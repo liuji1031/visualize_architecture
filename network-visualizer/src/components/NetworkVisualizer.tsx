@@ -245,7 +245,31 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
       });
   }, [processConfig, setError, setFile]); // Added dependencies
 
-  // *** NEW: Handler for double-clicking ComposableModel nodes with config paths ***
+  // Helper function to calculate dynamic padding based on node count
+  const calculateDynamicPadding = (nodeCount: number): number => {
+    // Base padding of 0.2 for small graphs
+    const basePadding = 0.2;
+    
+    // Increase padding for larger graphs, but cap it at a reasonable value
+    if (nodeCount <= 5) return basePadding;
+    if (nodeCount <= 10) return basePadding + 0.1;
+    if (nodeCount <= 20) return basePadding + 0.2;
+    return basePadding + 0.3; // Max padding for very large graphs
+  };
+
+  // Helper function to calculate transition duration based on complexity
+  const calculateTransitionDuration = (nodeCount: number): number => {
+    // Base duration of 600ms
+    const baseDuration = 600;
+    
+    // Increase duration for larger graphs to make transitions smoother
+    if (nodeCount <= 5) return baseDuration;
+    if (nodeCount <= 10) return baseDuration + 200;
+    if (nodeCount <= 20) return baseDuration + 400;
+    return baseDuration + 600; // Max duration for very large graphs
+  };
+
+  // *** IMPROVED: Handler for double-clicking ComposableModel nodes with config paths ***
   const handleNodeDoubleClick = useCallback(async (nodeId: string, configPath: string) => {
     console.log(`Double-clicked ComposableModel node ${nodeId} with config path: ${configPath}`);
     setError(null); // Clear previous errors
@@ -258,10 +282,11 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
     }
 
     // Center view on the clicked node *before* fetching/processing
-    reactFlowInstance.fitView({ nodes: [{ id: nodeId }], padding: 0.2, duration: 400 });
+    // Use a slightly longer duration for the initial centering
+    reactFlowInstance.fitView({ nodes: [{ id: nodeId }], padding: 0.3, duration: 500 });
 
-    // Use a short delay to allow fitView animation to start
-    await new Promise(resolve => setTimeout(resolve, 100)); 
+    // Use a longer delay to allow fitView animation to complete
+    await new Promise(resolve => setTimeout(resolve, 200)); 
 
     try {
       // Use the new getSubgraphConfig function which works with the session context
@@ -287,10 +312,28 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
         setNodes(cachedState.nodes); 
         setEdges(cachedState.edges); 
 
-        // Fit view to the cached subgraph nodes after state update
+        // Calculate dynamic padding and duration based on node count
+        const nodeCount = cachedState.nodes.length;
+        const padding = calculateDynamicPadding(nodeCount);
+        const duration = calculateTransitionDuration(nodeCount);
+
+        // Fit view to the cached subgraph nodes after state update with increased timeout
         setTimeout(() => {
-          reactFlowInstance.fitView({ nodes: cachedState.nodes.map(n => ({ id: n.id })), padding: 0.2, duration: 400 });
-        }, 0);
+          console.log(`Centering view on ${nodeCount} nodes with padding ${padding} and duration ${duration}ms`);
+          reactFlowInstance.fitView({ 
+            nodes: cachedState.nodes.map(n => ({ id: n.id })), 
+            padding: padding, 
+            duration: duration 
+          });
+          
+          // Add a fallback centering mechanism with a longer delay
+          setTimeout(() => {
+            reactFlowInstance.fitView({ 
+              padding: padding, 
+              duration: duration / 2 
+            });
+          }, 500);
+        }, 200); // Increased from 0ms to 200ms
 
       } else {
         console.log(`Generating new subgraph for key ${cacheKey}`);
@@ -314,10 +357,28 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
           setNodes(newlyGeneratedState.nodes); 
           setEdges(newlyGeneratedState.edges); 
 
-          // Fit view to the newly generated subgraph nodes after state update
+          // Calculate dynamic padding and duration based on node count
+          const nodeCount = newlyGeneratedState.nodes.length;
+          const padding = calculateDynamicPadding(nodeCount);
+          const duration = calculateTransitionDuration(nodeCount);
+
+          // Fit view to the newly generated subgraph nodes after state update with increased timeout
           setTimeout(() => {
-            reactFlowInstance.fitView({ nodes: newlyGeneratedState.nodes.map(n => ({ id: n.id })), padding: 0.2, duration: 400 });
-          }, 0);
+            console.log(`Centering view on ${nodeCount} nodes with padding ${padding} and duration ${duration}ms`);
+            reactFlowInstance.fitView({ 
+              nodes: newlyGeneratedState.nodes.map(n => ({ id: n.id })), 
+              padding: padding, 
+              duration: duration 
+            });
+            
+            // Add a fallback centering mechanism with a longer delay
+            setTimeout(() => {
+              reactFlowInstance.fitView({ 
+                padding: padding, 
+                duration: duration / 2 
+              });
+            }, 500);
+          }, 200); // Increased from 0ms to 200ms
         } else {
            setError(`Failed to process subgraph config from ${configPath}`);
         }
@@ -326,7 +387,16 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
       const errorMsg = `Error loading/processing subgraph from ${configPath}: ${(err as Error).message}`;
       setError(errorMsg);
       console.error(errorMsg, err);
-      // Optionally, revert fitView or show error near the node
+      // Revert fitView to show the original node if there's an error
+      setTimeout(() => {
+        if (parentNode) {
+          reactFlowInstance.fitView({ 
+            nodes: [{ id: nodeId }], 
+            padding: 0.3, 
+            duration: 500 
+          });
+        }
+      }, 300);
     }
   }, [
     reactFlowInstance, 
@@ -462,9 +532,24 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
       // Fit view for the previous graph
       setTimeout(() => {
         if (reactFlowInstance) {
-          // Fit view might need adjustment if nodes were added/removed, 
-          // but for now, just fit to the currently visible ones.
-          reactFlowInstance.fitView({ padding: 0.2, duration: 800 }); 
+          // Calculate dynamic padding based on node count
+          const nodeCount = previousGraphState.nodes.length;
+          const padding = calculateDynamicPadding(nodeCount);
+          const duration = calculateTransitionDuration(nodeCount);
+          
+          // Use dynamic padding and duration for smoother transitions
+          reactFlowInstance.fitView({ 
+            padding: padding, 
+            duration: duration 
+          }); 
+          
+          // Add a fallback centering with a longer delay
+          setTimeout(() => {
+            reactFlowInstance.fitView({ 
+              padding: padding, 
+              duration: duration / 2 
+            });
+          }, 500);
         }
       }, 300);
     }
@@ -476,7 +561,15 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
   const resetView = useCallback(() => {
     setTimeout(() => {
       if (reactFlowInstance) {
-        reactFlowInstance.fitView({ padding: 0.2, duration: 800 });
+        // Calculate dynamic padding based on node count
+        const nodeCount = nodes.length;
+        const padding = calculateDynamicPadding(nodeCount);
+        const duration = calculateTransitionDuration(nodeCount);
+        
+        reactFlowInstance.fitView({ 
+          padding: padding, 
+          duration: duration 
+        });
       }
     }, 300);
   }, [reactFlowInstance]);
