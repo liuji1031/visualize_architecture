@@ -34,7 +34,8 @@ import {
   checkYamlReferences,
   ReferencesResponse,
   uploadYamlFolder,
-  UploadFolderOptions
+  UploadFolderOptions,
+  cleanupTempDirectory
 } from '../services/api';
 // Import layout constants
 import { processNetworkStructure, NODE_WIDTH, HORIZONTAL_SPACING } from '../utils/networkProcessor';
@@ -461,12 +462,32 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
   
   // Handle file upload button click 
   const handleUploadClick = useCallback(() => {
-    fileInputRef.current?.click();
+    // Clean up the temp directory before uploading a new file
+    cleanupTempDirectory()
+      .then(() => {
+        console.log('Temporary directory cleaned up successfully');
+        fileInputRef.current?.click();
+      })
+      .catch((err) => {
+        console.error('Error cleaning up temporary directory:', err);
+        // Continue with file upload even if cleanup fails
+        fileInputRef.current?.click();
+      });
   }, []);
   
   // Handle folder upload button click
   const handleUploadFolderClick = useCallback(() => {
-    folderInputRef.current?.click();
+    // Clean up the temp directory before uploading a new folder
+    cleanupTempDirectory()
+      .then(() => {
+        console.log('Temporary directory cleaned up successfully');
+        folderInputRef.current?.click();
+      })
+      .catch((err) => {
+        console.error('Error cleaning up temporary directory:', err);
+        // Continue with folder upload even if cleanup fails
+        folderInputRef.current?.click();
+      });
   }, []);
   
   // Handle folder dialog confirmation

@@ -20,6 +20,39 @@ from ..services.yaml_service import (
 # Create a blueprint for YAML routes
 yaml_bp = Blueprint('yaml', __name__, url_prefix='/api/yaml')
 
+@yaml_bp.route('/cleanup-temp', methods=['POST'])
+def cleanup_temp():
+    """
+    Clean up the temporary directory stored in the session.
+    
+    This endpoint deletes all files in the temporary directory
+    and removes the directory itself if it exists.
+    
+    Returns:
+        JSON response indicating success or failure
+    """
+    # Get the temporary directory from the session
+    temp_dir = session.get('upload_temp_dir')
+    
+    if not temp_dir:
+        return jsonify({'message': 'No temporary directory to clean up'}), 200
+    
+    try:
+        # Check if the directory exists
+        if os.path.exists(temp_dir) and os.path.isdir(temp_dir):
+            # Remove the directory and all its contents
+            shutil.rmtree(temp_dir)
+            print(f"Cleaned up temporary directory: {temp_dir}")
+        
+        # Remove the temporary directory from the session
+        session.pop('upload_temp_dir', None)
+        
+        return jsonify({'message': 'Temporary directory cleaned up successfully'}), 200
+    except Exception as e:
+        error_message = f"Error cleaning up temporary directory: {str(e)}"
+        print(error_message)
+        return jsonify({'error': error_message}), 500
+
 @yaml_bp.route('/parse', methods=['POST'])
 def parse():
     """

@@ -27,6 +27,28 @@ export interface UploadFolderOptions {
 const API_BASE_URL = 'http://localhost:5000/api';
 
 /**
+ * Clean up the temporary directory stored in the session
+ * @returns Promise resolving to a success message
+ */
+export const cleanupTempDirectory = async (): Promise<{ message: string }> => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/yaml/cleanup-temp`, {
+      method: 'POST',
+      credentials: 'include', // Ensure session cookies are sent
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to clean up temporary directory: ${response.statusText}`);
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('Error cleaning up temporary directory:', error);
+    throw error;
+  }
+};
+
+/**
  * Parse YAML content via the backend API
  * @param content - YAML content as string
  * @returns Promise resolving to parsed YAML configuration
