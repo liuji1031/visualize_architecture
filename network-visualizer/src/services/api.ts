@@ -191,31 +191,52 @@ export const fetchYamlFile = async (url: string): Promise<YamlConfig> => {
 };
 
 /**
+ * Error response from the get-subgraph endpoint when a config file is not found
+ */
+export interface ConfigFileNotFoundError {
+  error: string;
+  errorType: 'CONFIG_FILE_NOT_FOUND';
+  configPath: string;
+  moduleName: string;
+}
+
+/**
  * Fetch subgraph configuration using a relative path (within session context)
  * @param relativePath - Relative path within the uploaded folder context
+ * @param moduleName - Name of the module requesting the config
  * @returns Promise resolving to parsed YAML configuration
  */
-export const getSubgraphConfig = async (relativePath: string): Promise<YamlConfig> => {
+export const getSubgraphConfig = async (relativePath: string, moduleName: string = 'ComposableModel'): Promise<YamlConfig> => {
   try {
     const response = await fetch(`${API_BASE_URL}/yaml/get-subgraph`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      // Send relativePath in the body
-      body: JSON.stringify({ relativePath }),
+      // Send relativePath and moduleName in the body
+      body: JSON.stringify({ relativePath, moduleName }),
       credentials: 'include', // Ensure session cookies are sent
     });
 
     if (!response.ok) {
-       const errorData = await response.json().catch(() => ({})); // Try to get error details
-      // Provide a more specific error message based on status
+      const errorData = await response.json().catch(() => ({})); // Try to get error details
+      
+      // Check if this is a CONFIG_FILE_NOT_FOUND error
+      if (response.status === 404 && errorData.errorType === 'CONFIG_FILE_NOT_FOUND') {
+        // Create a custom error with the specific error type and details
+        const configError = errorData as ConfigFileNotFoundError;
+        const error = new Error(`CONFIG_FILE_NOT_FOUND:${configError.configPath}:${configError.moduleName}`);
+        error.name = 'ConfigFileNotFoundError';
+        throw error;
+      }
+      
+      // Handle other errors
       let errorMessage = `Failed to get subgraph config (${response.status} ${response.statusText})`;
       if (errorData.error) {
         errorMessage += `: ${errorData.error}`;
       }
       if (response.status === 400 && errorData.error?.includes("No active upload context")) {
-         errorMessage += " Please upload the folder again.";
+        errorMessage += " Please upload the folder again.";
       }
       throw new Error(errorMessage);
     }
@@ -223,7 +244,7 @@ export const getSubgraphConfig = async (relativePath: string): Promise<YamlConfi
     return await response.json();
   } catch (error) {
     console.error('Error getting subgraph config:', error);
-     // Re-throw the original error which might have more context
+    // Re-throw the original error which might have more context
     throw error instanceof Error ? error : new Error(String(error));
   }
 };

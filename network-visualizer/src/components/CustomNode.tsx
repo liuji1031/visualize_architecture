@@ -87,7 +87,7 @@ const tooltipStyles: React.CSSProperties = {
 };
 
 interface CustomNodeProps extends NodeProps<ModuleNodeData> {
-  onNodeDoubleClick?: (nodeId: string, configPath: string) => void; // Add callback prop
+  onNodeDoubleClick?: (nodeId: string, configPath: string, moduleName?: string) => void; // Updated to include moduleName
 }
 
 const CustomNode: React.FC<CustomNodeProps> = ({ data, isConnectable, id, ...props }) => { // Destructure props to get onNodeDoubleClick
@@ -441,9 +441,9 @@ const CustomNode: React.FC<CustomNodeProps> = ({ data, isConnectable, id, ...pro
   // Handle double click for ComposableModel nodes with config paths
   const handleDoubleClick = useCallback(() => {
     if (onNodeDoubleClick && cls === 'ComposableModel' && typeof config === 'string') {
-      onNodeDoubleClick(id, config);
+      onNodeDoubleClick(id, config, label);
     }
-  }, [id, cls, config, onNodeDoubleClick]);
+  }, [id, cls, config, onNodeDoubleClick, label]);
   
   return (
     <div 

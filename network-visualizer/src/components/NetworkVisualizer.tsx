@@ -271,7 +271,7 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
   };
 
   // *** IMPROVED: Handler for double-clicking ComposableModel nodes with config paths ***
-  const handleNodeDoubleClick = useCallback(async (nodeId: string, configPath: string) => {
+  const handleNodeDoubleClick = useCallback(async (nodeId: string, configPath: string, moduleName: string = '') => {
     console.log(`Double-clicked ComposableModel node ${nodeId} with config path: ${configPath}`);
     setError(null); // Clear previous errors
 
@@ -281,6 +281,9 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
       setError(`Node ${nodeId} not found.`);
       return;
     }
+
+    // Get the module name from the node data if not provided
+    const nodeModuleName = moduleName || (parentNode.data?.label || 'ComposableModel');
 
     // Center view on the clicked node *before* fetching/processing
     // Use a slightly longer duration for the initial centering
@@ -292,8 +295,8 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
     try {
       // Use the new getSubgraphConfig function which works with the session context
       console.log(`Getting subgraph config from relative path: ${configPath}`);
-      // Pass the relative path (configPath) to the new API function
-      const subgraphConfig = await getSubgraphConfig(configPath);
+      // Pass the relative path (configPath) and module name to the new API function
+      const subgraphConfig = await getSubgraphConfig(configPath, nodeModuleName);
       console.log('Fetched subgraph config:', subgraphConfig);
 
       const cacheKey = `${nodeId}-${configPath}`; // Cache key remains the same
@@ -385,9 +388,25 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
         }
       }
     } catch (err) {
-      const errorMsg = `Error loading/processing subgraph from ${configPath}: ${(err as Error).message}`;
-      setError(errorMsg);
-      console.error(errorMsg, err);
+      // Check if this is a CONFIG_FILE_NOT_FOUND error
+      const errorMessage = (err as Error).message;
+      if (errorMessage.startsWith('CONFIG_FILE_NOT_FOUND:')) {
+        // Parse the error message to get the config path and module name
+        const parts = errorMessage.split(':');
+        const configFilePath = parts[1];
+        const moduleName = parts[2] || nodeModuleName;
+        
+        // Set the custom error message
+        const customErrorMsg = `The configuration file ${configFilePath} for ${moduleName} is not found, please upload as a folder.`;
+        setError(customErrorMsg);
+        console.error(customErrorMsg);
+      } else {
+        // Handle other errors
+        const errorMsg = `Error loading/processing subgraph from ${configPath}: ${(err as Error).message}`;
+        setError(errorMsg);
+        console.error(errorMsg, err);
+      }
+      
       // Revert fitView to show the original node if there's an error
       setTimeout(() => {
         if (parentNode) {

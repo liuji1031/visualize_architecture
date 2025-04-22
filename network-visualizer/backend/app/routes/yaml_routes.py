@@ -446,7 +446,14 @@ def get_subgraph():
             
             if not matching_files:
                 print(f"Error: File '{filename}' not found anywhere in temp dir '{temp_dir}'")
-                return jsonify({'error': f'Subgraph file not found: {relative_path}'}), 404
+                # Extract module name from the request data if available
+                module_name = data.get('moduleName', 'ComposableModel')
+                return jsonify({
+                    'error': f'Subgraph file not found: {relative_path}',
+                    'errorType': 'CONFIG_FILE_NOT_FOUND',
+                    'configPath': relative_path,
+                    'moduleName': module_name
+                }), 404
             
             if len(matching_files) > 1:
                 print(f"Warning: Multiple files named '{filename}' found in temp dir. Using the first one: {matching_files[0]}")
