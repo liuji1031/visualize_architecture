@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, useEffect, Fragment } from 'react';
+import React, { useState, useCallback, useRef, useEffect, Fragment, createContext, useContext } from 'react'; // Added createContext, useContext
 import JSZip from 'jszip';
 import ReactFlow, {
   ReactFlowProvider,
@@ -21,11 +21,12 @@ import ReactFlow, {
   // applyNodeChanges, // No longer needed directly if using hook's handler
   EdgeChange, // Needed for onEdgesChange (provided by hook)
   // applyEdgeChanges, // No longer needed directly if using hook's handler
+  EdgeProps, // Add EdgeProps import
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 
 // Reintroduce useNodesState and useEdgesState (Comment redundant)
-import { YamlConfig, ModuleNodeData } from '../types';
+import { YamlConfig, ModuleNodeData, ModuleEdgeData } from '../types'; // Add ModuleEdgeData import
 import { 
   parseYamlContent,
   uploadYamlFile,
@@ -42,10 +43,8 @@ import { processNetworkStructure, NODE_WIDTH, HORIZONTAL_SPACING } from '../util
 import CustomNode from './CustomNode'; // Ensure CustomNode is imported
 import CustomEdge from './CustomEdge';
 
-// Define custom edge types (nodeTypes will be defined later with the handler)
-const edgeTypes: EdgeTypes = {
-  custom: CustomEdge,
-};
+// Create a context for edge label visibility
+export const EdgeLabelContext = createContext<boolean>(true);
 
 interface NetworkVisualizerProps {
   yamlContent?: string;
@@ -63,6 +62,7 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
   const [folderFiles, setFolderFiles] = useState<string[]>([]);
   const [zipFile, setZipFile] = useState<File | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [showEdgeLabels, setShowEdgeLabels] = useState<boolean>(true); // State for toggle
 
   // State for managing graph history (stack)
   type GraphState = { nodes: Node[]; edges: Edge[]; config?: YamlConfig }; // Added optional config
@@ -75,6 +75,16 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const reactFlowInstance = useReactFlow();
+
+  // Revert edgeTypes definition to simple mapping
+  const edgeTypes: EdgeTypes = {
+    custom: CustomEdge,
+  };
+
+  // Handle toggle for edge labels
+  const toggleEdgeLabels = useCallback(() => {
+    setShowEdgeLabels(prev => !prev);
+  }, []);
 
   // Handle window resize events
   useEffect(() => {
@@ -612,7 +622,7 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
         });
       }
     }, 300);
-  }, [reactFlowInstance]);
+  }, [reactFlowInstance, nodes]);
 
   // Define nodeTypes, wrapping CustomNode to pass the double-click handler
   const nodeTypes: NodeTypes = React.useMemo(() => ({
@@ -620,218 +630,240 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
   }), [handleNodeDoubleClick]); // Recompute only if the handler changes
   
   return (
-    <div style={{ width: '100%', height: '100%' }}>
-      <ReactFlow
-        nodes={nodes}
-        edges={edges}
-        onNodesChange={onNodesChange} // Use handler from hook
-        onEdgesChange={onEdgesChange} // Use handler from hook
-        onConnect={onConnect}
-        // onNodeDoubleClick prop is removed - handled internally by CustomNode now
-        nodeTypes={nodeTypes} // Use the memoized nodeTypes with the handler
-        edgeTypes={edgeTypes}
-        // Removed fitView prop to rely on manual fitView calls
-        nodesDraggable
-        elementsSelectable
-      >
-        <Background />
-        <Controls />
-        
-        <Panel position="top-left">
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            <input
-              type="file"
-              ref={fileInputRef}
-              style={{ display: 'none' }}
-              accept=".yaml,.yml"
-              onChange={handleFileChange}
-            />
-            <input
-              type="file"
-              ref={folderInputRef}
-              style={{ display: 'none' }}
-              // @ts-ignore - webkitdirectory and directory are non-standard attributes
-              webkitdirectory=""
-              directory=""
-              multiple
-              onChange={handleFolderChange}
-            />
-            <button
-              onClick={handleUploadClick}
-              style={{
-                padding: '8px 12px',
-                backgroundColor: '#4a90e2',
-                color: 'white',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer',
-              }}
-            >
-              Upload YAML File
-            </button>
-            <button
-              onClick={handleUploadFolderClick}
-              style={{
-                padding: '8px 12px',
-                backgroundColor: '#28a745',
-                color: 'white',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer',
-              }}
-            >
-              Upload Folder
-            </button>
-            <button
-              onClick={resetView}
-              style={{
-                padding: '8px 12px',
-                backgroundColor: '#6c757d',
-                color: 'white',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer',
-              }}
-            >
-              Reset View
-            </button>
-            {/* Add Go Back button, only visible when not at the root level */}
-            {currentGraphIndex > 0 && (
+    <EdgeLabelContext.Provider value={showEdgeLabels}>
+      <div style={{ width: '100%', height: '100%' }}>
+        <ReactFlow
+          nodes={nodes}
+          edges={edges}
+          onNodesChange={onNodesChange} // Use handler from hook
+          onEdgesChange={onEdgesChange} // Use handler from hook
+          onConnect={onConnect}
+          // onNodeDoubleClick prop is removed - handled internally by CustomNode now
+          nodeTypes={nodeTypes} // Use the memoized nodeTypes with the handler
+          edgeTypes={edgeTypes} // Use the simple edgeTypes mapping
+          // Removed fitView prop to rely on manual fitView calls
+          nodesDraggable
+          elementsSelectable
+        >
+          <Background />
+          <Controls />
+          
+          <Panel position="top-left">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <input
+                type="file"
+                ref={fileInputRef}
+                style={{ display: 'none' }}
+                accept=".yaml,.yml"
+                onChange={handleFileChange}
+              />
+              <input
+                type="file"
+                ref={folderInputRef}
+                style={{ display: 'none' }}
+                // @ts-ignore - webkitdirectory and directory are non-standard attributes
+                webkitdirectory=""
+                directory=""
+                multiple
+                onChange={handleFolderChange}
+              />
               <button
-                onClick={handleGoBack}
+                onClick={handleUploadClick}
                 style={{
-                  marginTop: '10px', // Add some space
                   padding: '8px 12px',
-                  backgroundColor: '#ffc107', // Use a distinct color
-                  color: 'black',
+                  backgroundColor: '#4a90e2',
+                  color: 'white',
                   border: 'none',
                   borderRadius: '4px',
                   cursor: 'pointer',
                 }}
               >
-                Go Back
+                Upload YAML File
               </button>
-            )}
-          </div>
-        </Panel>
-        
-        {error && (
-          <Panel position="top-center">
-            <div
-              style={{
-                padding: '10px',
-                backgroundColor: '#f8d7da',
-                color: '#721c24',
-                borderRadius: '4px',
-                border: '1px solid #f5c6cb',
-              }}
-            >
-              {error}
-            </div>
-          </Panel>
-        )}
-        
-        {file && (
-          <Panel position="top-right">
-            <div
-              style={{
-                padding: '10px',
-                backgroundColor: '#e2f3f5',
-                borderRadius: '4px',
-                border: '1px solid #90cdf4',
-              }}
-            >
-              <strong>Current File:</strong> {file.name}
-            </div>
-          </Panel>
-        )}
-        
-        {/* Folder Dialog */}
-        {showFolderDialog && (
-          <div
-            style={{
-              position: 'fixed',
-              top: 0,
-              left: 0,
-              right: 0,
-              bottom: 0,
-              backgroundColor: 'rgba(0, 0, 0, 0.5)',
-              display: 'flex',
-              justifyContent: 'center',
-              alignItems: 'center',
-              zIndex: 1000,
-            }}
-          >
-            <div
-              style={{
-                backgroundColor: 'white',
-                padding: '20px',
-                borderRadius: '8px',
-                maxWidth: '600px',
-                maxHeight: '80vh',
-                overflow: 'auto',
-              }}
-            >
-              <h3 style={{ marginTop: 0 }}>Select Main YAML File</h3>
-              <p>
-                Please select the main YAML file to process from the uploaded folder.
-              </p>
-              
-              <div style={{ marginBottom: '20px' }}>
-                <select
-                  value={mainFile}
-                  onChange={(e) => setMainFile(e.target.value)}
-                  style={{
-                    width: '100%',
-                    padding: '8px',
-                    borderRadius: '4px',
-                    border: '1px solid #ccc',
-                  }}
-                >
-                  <option value="">-- Select a file --</option>
-                  {folderFiles
-                    .filter(file => file.endsWith('.yaml') || file.endsWith('.yml'))
-                    .map((file, index) => (
-                      <option key={index} value={file}>{file}</option>
-                    ))
-                  }
-                </select>
-              </div>
-              
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button
+                onClick={handleUploadFolderClick}
+                style={{
+                  padding: '8px 12px',
+                  backgroundColor: '#28a745',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                }}
+              >
+                Upload Folder
+              </button>
+              <button
+                onClick={resetView}
+                style={{
+                  padding: '8px 12px',
+                  backgroundColor: '#6c757d',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                }}
+              >
+                Reset View
+              </button>
+              {/* Add Go Back button, only visible when not at the root level */}
+              {currentGraphIndex > 0 && (
                 <button
-                  onClick={handleCancelFolder}
+                  onClick={handleGoBack}
                   style={{
+                    marginTop: '10px', // Add some space
                     padding: '8px 12px',
-                    backgroundColor: '#6c757d',
-                    color: 'white',
+                    backgroundColor: '#ffc107', // Use a distinct color
+                    color: 'black',
                     border: 'none',
                     borderRadius: '4px',
                     cursor: 'pointer',
                   }}
                 >
-                  Cancel
+                  Go Back
                 </button>
-                <button
-                  onClick={handleConfirmFolder}
-                  disabled={!mainFile}
-                  style={{
-                    padding: '8px 12px',
-                    backgroundColor: mainFile ? '#4a90e2' : '#cccccc',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: mainFile ? 'pointer' : 'not-allowed',
-                  }}
-                >
-                  Process
-                </button>
+              )}
+              {/* Add checkbox for edge labels */}
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                backgroundColor: '#f0f0f0',
+                padding: '8px 12px',
+                borderRadius: '4px',
+                border: '1px solid #ccc',
+              }}>
+                <input
+                  type="checkbox"
+                  id="edge-labels-toggle"
+                  checked={showEdgeLabels}
+                  onChange={toggleEdgeLabels}
+                  style={{ marginRight: '8px' }}
+                />
+                <label htmlFor="edge-labels-toggle" style={{ fontSize: '14px', cursor: 'pointer' }}>
+                  Show Edge Labels
+                </label>
               </div>
             </div>
-          </div>
-        )}
-      </ReactFlow>
-    </div>
+          </Panel>
+          
+          {error && (
+            <Panel position="top-center">
+              <div
+                style={{
+                  padding: '10px',
+                  backgroundColor: '#f8d7da',
+                  color: '#721c24',
+                  borderRadius: '4px',
+                  border: '1px solid #f5c6cb',
+                }}
+              >
+                {error}
+              </div>
+            </Panel>
+          )}
+          
+          {file && (
+            <Panel position="top-right">
+              <div
+                style={{
+                  padding: '10px',
+                  backgroundColor: '#e2f3f5',
+                  borderRadius: '4px',
+                  border: '1px solid #90cdf4',
+                }}
+              >
+                <strong>Current File:</strong> {file.name}
+              </div>
+            </Panel>
+          )}
+          
+          {/* Folder Dialog */}
+          {showFolderDialog && (
+            <div
+              style={{
+                position: 'fixed',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                backgroundColor: 'rgba(0, 0, 0, 0.5)',
+                display: 'flex',
+                justifyContent: 'center',
+                alignItems: 'center',
+                zIndex: 1000,
+              }}
+            >
+              <div
+                style={{
+                  backgroundColor: 'white',
+                  padding: '20px',
+                  borderRadius: '8px',
+                  maxWidth: '600px',
+                  maxHeight: '80vh',
+                  overflow: 'auto',
+                }}
+              >
+                <h3 style={{ marginTop: 0 }}>Select Main YAML File</h3>
+                <p>
+                  Please select the main YAML file to process from the uploaded folder.
+                </p>
+                
+                <div style={{ marginBottom: '20px' }}>
+                  <select
+                    value={mainFile}
+                    onChange={(e) => setMainFile(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '8px',
+                      borderRadius: '4px',
+                      border: '1px solid #ccc',
+                    }}
+                  >
+                    <option value="">-- Select a file --</option>
+                    {folderFiles
+                      .filter(file => file.endsWith('.yaml') || file.endsWith('.yml'))
+                      .map((file, index) => (
+                        <option key={index} value={file}>{file}</option>
+                      ))
+                    }
+                  </select>
+                </div>
+                
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                  <button
+                    onClick={handleCancelFolder}
+                    style={{
+                      padding: '8px 12px',
+                      backgroundColor: '#6c757d',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleConfirmFolder}
+                    disabled={!mainFile}
+                    style={{
+                      padding: '8px 12px',
+                      backgroundColor: mainFile ? '#4a90e2' : '#cccccc',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '4px',
+                      cursor: mainFile ? 'pointer' : 'not-allowed',
+                    }}
+                  >
+                    Process
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </ReactFlow>
+      </div>
+    </EdgeLabelContext.Provider>
   );
 };
 
