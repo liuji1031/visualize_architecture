@@ -23,28 +23,46 @@ export interface UploadFolderOptions {
   mainFile: string;
 }
 
+/**
+ * Response type for successful uploads, including the upload ID
+ */
+export interface UploadResponse {
+  config: YamlConfig;
+  uploadId: string;
+}
+
 // Backend API base URL
-const API_BASE_URL = 'http://localhost:5000/api';
+const API_BASE_URL = 'https://network-visualizer-backend-846251040656.us-east4.run.app/api'; // Will be replaced during build/deployment
 
 /**
- * Clean up the temporary directory stored in the session
+ * Clean up the GCS resources for a specific upload session
+ * @param uploadId - The unique ID of the upload session to clean up
  * @returns Promise resolving to a success message
  */
-export const cleanupTempDirectory = async (): Promise<{ message: string }> => {
+export const cleanupUpload = async (uploadId: string | null): Promise<{ message: string }> => {
+  if (!uploadId) {
+    // Nothing to clean up if there's no current upload ID
+    return Promise.resolve({ message: 'No active upload to clean up.' });
+  }
   try {
-    const response = await fetch(`${API_BASE_URL}/yaml/cleanup-temp`, {
+    const response = await fetch(`${API_BASE_URL}/yaml/cleanup-upload`, { // Renamed endpoint
       method: 'POST',
-      credentials: 'include', // Ensure session cookies are sent
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ uploadId }),
+      // credentials: 'include', // Not needed if not relying on cookies
     });
 
     if (!response.ok) {
-      throw new Error(`Failed to clean up temporary directory: ${response.statusText}`);
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(`Failed to clean up upload ${uploadId}: ${response.statusText} - ${errorData.error || 'Unknown error'}`);
     }
 
     return await response.json();
   } catch (error) {
-    console.error('Error cleaning up temporary directory:', error);
-    throw error;
+    console.error(`Error cleaning up upload ${uploadId}:`, error);
+    throw error; // Re-throw to allow calling component to handle
   }
 };
 
@@ -104,23 +122,27 @@ export const checkYamlReferences = async (file: File): Promise<ReferencesRespons
  * Upload and process a YAML file via the backend API
  * @param file - File object to upload
  * @param autoUploadReferences - Whether to automatically upload referenced files
- * @returns Promise resolving to parsed YAML configuration
+ * @returns Promise resolving to an object containing parsed YAML configuration and uploadId
  */
-export const uploadYamlFile = async (file: File, autoUploadReferences: boolean = false): Promise<YamlConfig> => {
+export const uploadYamlFile = async (file: File): Promise<UploadResponse> => {
+  // Removed autoUploadReferences as it's less relevant with GCS handling
   try {
     const formData = new FormData();
     formData.append('file', file);
-    formData.append('auto_upload_references', autoUploadReferences.toString());
+    // formData.append('auto_upload_references', 'false'); // Explicitly false if needed by backend
 
     const response = await fetch(`${API_BASE_URL}/yaml/upload`, {
       method: 'POST',
       body: formData,
+      // credentials: 'include', // Not needed if not relying on cookies
     });
 
     if (!response.ok) {
-      throw new Error(`Failed to upload YAML file: ${response.statusText}`);
+       const errorData = await response.json().catch(() => ({}));
+      throw new Error(`Failed to upload YAML file: ${response.statusText} - ${errorData.error || 'Unknown error'}`);
     }
 
+    // Expect { config: YamlConfig, uploadId: string }
     return await response.json();
   } catch (error) {
     console.error('Error uploading YAML file:', error);
@@ -131,9 +153,9 @@ export const uploadYamlFile = async (file: File, autoUploadReferences: boolean =
 /**
  * Upload a folder of YAML files and process the main YAML file
  * @param options - Upload folder options
- * @returns Promise resolving to parsed YAML configuration
+ * @returns Promise resolving to an object containing parsed YAML configuration and uploadId
  */
-export const uploadYamlFolder = async (options: UploadFolderOptions): Promise<YamlConfig> => {
+export const uploadYamlFolder = async (options: UploadFolderOptions): Promise<UploadResponse> => {
   try {
     const formData = new FormData();
     formData.append('zip_file', options.zipFile);
@@ -142,13 +164,15 @@ export const uploadYamlFolder = async (options: UploadFolderOptions): Promise<Ya
     const response = await fetch(`${API_BASE_URL}/yaml/upload-folder`, {
       method: 'POST',
       body: formData,
-      credentials: 'include', // Ensure session cookies are sent
+      // credentials: 'include', // Not needed if not relying on cookies
     });
 
     if (!response.ok) {
-      throw new Error(`Failed to upload YAML folder: ${response.statusText}`);
+       const errorData = await response.json().catch(() => ({}));
+      throw new Error(`Failed to upload YAML folder: ${response.statusText} - ${errorData.error || 'Unknown error'}`);
     }
 
+    // Expect { config: YamlConfig, uploadId: string }
     return await response.json();
   } catch (error) {
     console.error('Error uploading YAML folder:', error);
@@ -201,21 +225,26 @@ export interface ConfigFileNotFoundError {
 }
 
 /**
- * Fetch subgraph configuration using a relative path (within session context)
- * @param relativePath - Relative path within the uploaded folder context
+ * Fetch subgraph configuration using uploadId and relative path
+ * @param uploadId - The unique ID of the upload session
+ * @param relativePath - Relative path within the GCS upload prefix
  * @param moduleName - Name of the module requesting the config
  * @returns Promise resolving to parsed YAML configuration
  */
-export const getSubgraphConfig = async (relativePath: string, moduleName: string = 'ComposableModel'): Promise<YamlConfig> => {
+export const getSubgraphConfig = async (uploadId: string | null, relativePath: string, moduleName: string = 'ComposableModel'): Promise<YamlConfig> => {
+  if (!uploadId) {
+    // Handle case where there's no active upload context
+    throw new Error("No active upload session found. Please upload a file or folder first.");
+  }
   try {
     const response = await fetch(`${API_BASE_URL}/yaml/get-subgraph`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      // Send relativePath and moduleName in the body
-      body: JSON.stringify({ relativePath, moduleName }),
-      credentials: 'include', // Ensure session cookies are sent
+      // Send uploadId, relativePath, and moduleName in the body
+      body: JSON.stringify({ uploadId, relativePath, moduleName }),
+      // credentials: 'include', // Not needed if not relying on cookies
     });
 
     if (!response.ok) {

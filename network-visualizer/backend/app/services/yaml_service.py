@@ -1,313 +1,330 @@
 import os
 import yaml
 import requests
+import tempfile # Still needed for local temp copies
+import shutil
+import traceback
 from typing import Dict, Any, Optional, List, Tuple
 from omegaconf import OmegaConf
+from google.cloud import storage
+from google.api_core import exceptions as gcs_exceptions # For specific GCS error handling
 
-# Modified signature to accept root_temp_dir
-def parse_yaml_content(content: str, base_path: str = '', root_temp_dir: Optional[str] = None) -> Dict[str, Any]:
+# --- GCS Configuration ---
+# Get bucket name from environment variable
+GCS_BUCKET_NAME = os.environ.get('GCS_BUCKET_NAME')
+if not GCS_BUCKET_NAME:
+    print("WARNING: GCS_BUCKET_NAME environment variable not set.")
+
+# Initialize GCS client
+try:
+    storage_client = storage.Client()
+    gcs_bucket = storage_client.bucket(GCS_BUCKET_NAME) if GCS_BUCKET_NAME else None
+except Exception as e:
+    print(f"ERROR: Failed to initialize GCS client: {e}")
+    storage_client = None
+    gcs_bucket = None
+# --- End GCS Configuration ---
+
+# --- GCS Helper Functions ---
+def download_gcs_blob_to_temp(blob_name: str) -> Optional[str]:
+    """Downloads a GCS blob to a local temporary file and returns the path."""
+    if not gcs_bucket:
+        print("ERROR: GCS bucket not initialized.")
+        return None
+    try:
+        blob = gcs_bucket.blob(blob_name)
+        # Create a temporary file (ensures unique name)
+        _, temp_local_filename = tempfile.mkstemp()
+        blob.download_to_filename(temp_local_filename)
+        print(f"Downloaded gs://{GCS_BUCKET_NAME}/{blob_name} to {temp_local_filename}")
+        return temp_local_filename
+    except gcs_exceptions.NotFound:
+        print(f"ERROR: Blob not found in GCS: gs://{GCS_BUCKET_NAME}/{blob_name}")
+        return None # Indicate file not found
+    except Exception as e:
+        print(f"ERROR: Failed to download blob {blob_name}: {e}")
+        return None
+
+def cleanup_local_temp_file(file_path: Optional[str]):
+    """Safely removes a local temporary file if it exists."""
+    if file_path and os.path.exists(file_path):
+        try:
+            os.remove(file_path)
+            # print(f"Cleaned up local temp file: {file_path}")
+        except Exception as e:
+            print(f"WARNING: Failed to clean up local temp file {file_path}: {e}")
+
+# --- Modified Service Functions ---
+
+# Modified signature: accepts upload_id instead of root_temp_dir
+# base_path is now the relative directory *within* the GCS upload prefix
+def parse_yaml_content(content: str, upload_id: Optional[str] = None, base_path: str = '') -> Dict[str, Any]:
     """
-    Parse YAML content using OmegaConf, resolve interpolations, and resolve config references.
+    Parse YAML content, resolve interpolations, and resolve config references using GCS context.
 
     Args:
-        content: YAML content as a string
-        base_path: Base path for resolving relative file paths
-        root_temp_dir: The root temporary directory for the current upload context (if any)
+        content: YAML content as a string.
+        upload_id: The unique ID for the GCS upload context.
+        base_path: The relative directory path within the GCS upload prefix for resolving relative references.
 
     Returns:
-        Parsed YAML configuration with resolved interpolations and config references
+        Parsed YAML configuration with resolved interpolations and config references.
     """
-    # Parse the YAML content using OmegaConf
-    config = OmegaConf.create(yaml.safe_load(content))
+    try:
+        # Parse the YAML content using OmegaConf
+        config = OmegaConf.create(yaml.safe_load(content))
+        # Resolve interpolation expressions first
+        resolved_config = OmegaConf.to_container(config, resolve=True)
+    except Exception as e:
+        print(f"Error parsing initial YAML content: {e}")
+        return {'error': f"Invalid YAML content: {e}"}
 
-    # Resolve interpolation expressions
-    resolved_config = OmegaConf.to_container(config, resolve=True)
+    # Resolve config references using GCS context
+    try:
+        return resolve_config_references(resolved_config, upload_id=upload_id, base_path=base_path)
+    except Exception as e:
+        print(f"Error resolving config references: {e}")
+        # Return the partially resolved config but add an error marker
+        resolved_config['_processing_error'] = f"Error resolving references: {e}"
+        return resolved_config
 
-    # Resolve config references, passing root_temp_dir
-    return resolve_config_references(resolved_config, base_path, root_temp_dir)
 
+# find_config_references and find_all_config_references are problematic with GCS
+# without downloading everything first. They are less critical for the core processing logic
+# which now resolves references on demand via GCS.
+# Keep them for now but note their limitations in a GCS context.
 def find_config_references(config: Dict[str, Any], base_path: str = '') -> List[Tuple[str, str]]:
     """
-    Find all config fields that are strings pointing to YAML files.
-
-    Args:
-        config: The parsed YAML configuration
-        base_path: Base path for resolving relative file paths
-
-    Returns:
-        List of tuples (module_name, config_path) for each referenced file
+    Find all config fields that are strings pointing to YAML files (based on local paths).
+    NOTE: This function operates on the assumption of local paths and may not accurately
+          reflect GCS structure without adaptation or prior download of all files.
     """
     references = []
-
     if not config or 'modules' not in config:
         return references
-
     modules = config['modules']
-
-    # Process each module
     for module_name, module_data in modules.items():
-        # Skip entry and exit modules which have different structures
-        if module_name in ['entry', 'exit']:
-            continue
-
-        # Check if the module has a config field that is a string
+        if module_name in ['entry', 'exit']: continue
         if isinstance(module_data, dict) and 'config' in module_data and isinstance(module_data['config'], str):
-            config_path_str = module_data['config'] # Use a consistent name for the original string path
-
-            # Resolve the path relative to the base path
-            resolved_path = config_path_str # Initialize resolved_path with the original string
-            found_path_in_find = False # Use a different flag name to avoid scope issues
+            config_path_str = module_data['config']
+            # This resolution logic is local-filesystem based
+            resolved_path = config_path_str
             if not config_path_str.startswith('/'):
-                # Try different path resolutions using the original string
-                possible_paths = [
-                    os.path.join(base_path, config_path_str),
-                    os.path.join(os.getcwd(), config_path_str),
-                    # os.path.join(os.getcwd(), 'config', os.path.basename(config_path_str)), # Too specific
-                    config_path_str
-                ]
-
-                # Try each path until one works
+                possible_paths = [os.path.join(base_path, config_path_str), config_path_str]
                 for path in possible_paths:
-                    if os.path.exists(path):
-                        resolved_path = path # Update resolved_path if found
+                    if os.path.exists(path): # Checks local filesystem only
+                        resolved_path = path
                         references.append((module_name, resolved_path))
-                        found_path_in_find = True
                         break
-                # If not found_path_in_find, we don't add to references in this function
-            elif os.path.exists(resolved_path): # Check if absolute path exists
+            elif os.path.exists(resolved_path):
                  references.append((module_name, resolved_path))
-                 found_path_in_find = True
-
     return references
 
 def find_all_config_references(file_path: str) -> List[str]:
     """
-    Recursively find all YAML files referenced in a YAML file and its referenced files.
-
-    Args:
-        file_path: Path to the YAML file
-
-    Returns:
-        List of paths to all referenced YAML files
+    Recursively find all YAML files referenced (based on local paths).
+    NOTE: This function operates on the assumption of local paths and may not accurately
+          reflect GCS structure without adaptation or prior download of all files.
     """
-    # Get the base path for resolving relative paths
     base_path = os.path.dirname(file_path)
-    print(f"Finding all config references in: {file_path}")
-
+    print(f"Finding all config references locally in: {file_path}")
     try:
-        # Read the YAML file
-        with open(file_path, 'r') as f:
-            content = f.read()
-
-        # Parse the YAML content
+        with open(file_path, 'r') as f: content = f.read()
         config = yaml.safe_load(content)
-
-        # Find all referenced files relative to the current file's directory
-        references = find_config_references(config, base_path)
-
-        # Initialize the list of all referenced files
+        references = find_config_references(config, base_path) # Uses local path logic
         all_references = [file_path]
-
-        # Recursively find references in referenced files
-        processed_paths = {file_path} # Keep track of processed files to avoid infinite loops
+        processed_paths = {file_path}
         queue = [ref_path for _, ref_path in references]
-
         while queue:
             current_ref_path = queue.pop(0)
-            if current_ref_path in processed_paths:
-                continue
+            if current_ref_path in processed_paths: continue
             processed_paths.add(current_ref_path)
-            if current_ref_path not in all_references:
-                 all_references.append(current_ref_path)
-
+            if current_ref_path not in all_references: all_references.append(current_ref_path)
             try:
-                # Find references in the referenced file
-                nested_references = find_all_config_references(current_ref_path) # Recursive call
-
-                # Add new references to the queue if not already processed or queued
+                # Recursive call assumes local file exists
+                nested_references = find_all_config_references(current_ref_path)
                 for nested_ref in nested_references:
                     if nested_ref not in processed_paths and nested_ref not in queue:
                         queue.append(nested_ref)
-            except FileNotFoundError:
-                 print(f"Warning: Referenced file not found during recursive search: {current_ref_path}")
-            except Exception as e:
-                print(f"Error finding references in {current_ref_path}: {e}")
-
+            except FileNotFoundError: print(f"Warning: Referenced file not found locally during recursive search: {current_ref_path}")
+            except Exception as e: print(f"Error finding references locally in {current_ref_path}: {e}")
         return all_references
-    except FileNotFoundError:
-         print(f"Error: Initial file not found in find_all_config_references: {file_path}")
-         return [file_path] # Return only the initial path if it doesn't exist
-    except Exception as e:
-        print(f"Error reading or parsing initial file {file_path} in find_all_config_references: {e}")
-        return [file_path]
+    except FileNotFoundError: print(f"Error: Initial file not found locally in find_all_config_references: {file_path}"); return [file_path]
+    except Exception as e: print(f"Error reading/parsing initial file {file_path} locally in find_all_config_references: {e}"); return [file_path]
 
 
-# Modified signature to accept root_temp_dir
-def resolve_config_references(config: Dict[str, Any], base_path: str = '', root_temp_dir: Optional[str] = None) -> Dict[str, Any]:
+# Modified signature: accepts upload_id instead of root_temp_dir
+# base_path is the relative directory *within* the GCS upload prefix
+def resolve_config_references(config: Dict[str, Any], upload_id: Optional[str], base_path: str = '') -> Dict[str, Any]:
     """
-    Resolve config fields that are strings pointing to YAML files.
+    Resolve config fields pointing to YAML files by downloading from GCS.
 
     Args:
-        config: The parsed YAML configuration
-        base_path: Base path (directory of the current file being processed)
-        root_temp_dir: The root temporary directory for the current upload context (if any)
+        config: The parsed YAML configuration.
+        upload_id: The unique ID for the GCS upload context.
+        base_path: The relative directory path within the GCS upload prefix for the *current* file being processed.
 
     Returns:
-        Configuration with resolved config fields
+        Configuration with resolved config fields (or error markers).
     """
-    if not config or 'modules' not in config:
-        return config
+    if not config or 'modules' not in config or not upload_id or not gcs_bucket:
+        return config # Cannot resolve without context or GCS
 
     modules = config['modules']
+    gcs_upload_prefix = f"uploads/{upload_id}/"
 
-    # Process each module
     for module_name, module_data in modules.items():
-        # Skip entry and exit modules which have different structures
-        if module_name in ['entry', 'exit']:
-            continue
+        if module_name in ['entry', 'exit']: continue
 
-        # Check if the module has a config field that is a string
         if isinstance(module_data, dict) and 'config' in module_data and isinstance(module_data['config'], str):
-            original_config_path_str = module_data['config'] # Store the original string
-            resolved_config_path = original_config_path_str # Initialize resolved path with the original
+            original_config_path_str = module_data['config'] # This is the relative path string from the YAML
 
-            # Resolve the path relative to the base path
-            found_path_in_resolve = False
+            # --- GCS Path Resolution ---
+            # Assume relative paths are relative to the *current file's* directory within the GCS prefix
             if not original_config_path_str.startswith('/'):
-                # --- Path Resolution Logic ---
-                possible_paths = []
-                # Priority 1: Relative to current file's directory (base_path)
-                possible_paths.append(os.path.join(base_path, original_config_path_str))
+                 # Normalize path separators and combine with base_path
+                 normalized_ref_path = os.path.normpath(os.path.join(base_path, original_config_path_str))
+                 # Construct the full GCS blob name
+                 gcs_blob_name = f"{gcs_upload_prefix}{normalized_ref_path}"
+            else:
+                 # If it's an absolute path in the YAML, treat it as relative to the *root* of the upload prefix
+                 normalized_ref_path = os.path.normpath(original_config_path_str.lstrip('/'))
+                 gcs_blob_name = f"{gcs_upload_prefix}{normalized_ref_path}"
 
-                # Priority 2: If in temp context, relative to temp root
-                if root_temp_dir:
-                    possible_paths.append(os.path.join(root_temp_dir, original_config_path_str))
+            print(f"Module {module_name}: Resolving '{original_config_path_str}' relative to '{base_path}' -> GCS blob: {gcs_blob_name}")
 
-                # Fallbacks (less likely/reliable)
-                possible_paths.append(os.path.join(os.getcwd(), original_config_path_str)) # Relative to CWD
-                possible_paths.append(original_config_path_str) # As is
+            # Check if the blob exists in GCS
+            blob = gcs_bucket.blob(gcs_blob_name)
+            found_in_gcs = blob.exists()
+            # --- End GCS Path Resolution ---
 
-                # Remove duplicates while preserving order
-                possible_paths = list(dict.fromkeys(possible_paths))
-                print(f"Module {module_name}: Checking paths for '{original_config_path_str}': {possible_paths}")
-                # --- End Path Resolution Logic ---
-
-                # Try the constructed paths
-                for path in possible_paths:
-                    # Normalize path before checking existence
-                    normalized_path = os.path.normpath(path)
-                    if os.path.exists(normalized_path):
-                        # Security check: If in temp context, ensure path is within root_temp_dir
-                        if root_temp_dir:
-                             abs_temp_dir = os.path.abspath(root_temp_dir)
-                             if not os.path.abspath(normalized_path).startswith(abs_temp_dir + os.sep):
-                                 print(f"Warning: Path '{normalized_path}' exists but is outside temp dir '{root_temp_dir}'. Skipping.")
-                                 continue # Skip this path if outside temp dir
-
-                        resolved_config_path = normalized_path # Update resolved path if found and valid
-                        found_path_in_resolve = True
-                        break # Stop searching once found
-                # If not found_path_in_resolve, resolved_config_path remains the original string
-            elif os.path.exists(resolved_config_path): # Check if absolute path exists
-                 # Security check for absolute paths if in temp context
-                 if root_temp_dir:
-                      abs_temp_dir = os.path.abspath(root_temp_dir)
-                      if not os.path.abspath(resolved_config_path).startswith(abs_temp_dir + os.sep):
-                           print(f"Warning: Absolute path '{resolved_config_path}' is outside temp dir '{root_temp_dir}'. Treating as not found.")
-                           found_path_in_resolve = False # Mark as not found if outside temp dir
-                      else:
-                           found_path_in_resolve = True
-                 else:
-                      found_path_in_resolve = True # Absolute path outside temp context is fine
-
-            # *** Check if the module is a ComposableModel ***
             is_composable = module_data.get('cls') == 'ComposableModel'
 
             if is_composable:
-                # For ComposableModel, ensure 'config' holds the ORIGINAL string path
                 print(f"Module {module_name} is ComposableModel. Keeping original config path: {original_config_path_str}")
-                module_data['config'] = original_config_path_str # Explicitly set back to original string
-
-                if found_path_in_resolve:
-                     module_data['_resolved_config_path'] = resolved_config_path # Store resolved path separately if found
+                
+                # Store the normalized path instead of the original path
+                # This ensures that when the frontend tries to expand the node,
+                # the backend can find the file correctly
+                if found_in_gcs:
+                    # Store the normalized path that will work with the get-subgraph endpoint
+                    module_data['config'] = normalized_ref_path
+                    module_data['_resolved_config_path'] = f"gs://{GCS_BUCKET_NAME}/{gcs_blob_name}" # Store GCS path
+                    print(f"Stored normalized path for ComposableModel {module_name}: {normalized_ref_path}")
                 else:
-                     # Log a warning if the path couldn't be resolved
-                     print(f"Warning: Config path '{original_config_path_str}' for ComposableModel {module_name} could not be resolved to an existing file.")
-                continue # Skip file reading and content replacement for ComposableModel
+                    # Keep the original path if the file wasn't found
+                    module_data['config'] = original_config_path_str
+                    print(f"Warning: Config path '{original_config_path_str}' (-> {gcs_blob_name}) for ComposableModel {module_name} not found in GCS.")
+                
+                continue # Skip download/parsing for ComposableModel
 
-            # *** If not ComposableModel, proceed to read and parse the file using the RESOLVED path ***
-            if not found_path_in_resolve:
-                # If path wasn't resolved for a non-composable model, log an error, and skip
-                print(f"Error: Config path '{original_config_path_str}' for non-ComposableModel module {module_name} could not be resolved to an existing file.")
-                print(f"Skipping reading of config file {original_config_path_str} for module {module_name}.")
-                continue # Skip processing this module further
+            # --- If not ComposableModel, attempt download and parse ---
+            if not found_in_gcs:
+                error_msg = f"Config file '{original_config_path_str}' (-> {gcs_blob_name}) not found in GCS upload context {upload_id}."
+                print(f"Error: {error_msg}")
+                module_data['config'] = {'error': error_msg}
+                continue
 
-            # Path was resolved and it's not a ComposableModel, proceed with reading
+            # File found in GCS, download and process
+            local_temp_path = None
             try:
-                print(f"Attempting to read config file for module {module_name} from: {resolved_config_path}")
+                local_temp_path = download_gcs_blob_to_temp(gcs_blob_name)
+                if not local_temp_path: # Download failed
+                    raise FileNotFoundError(f"Failed to download {gcs_blob_name} from GCS.")
 
-                # Read and parse the referenced YAML file using the resolved path
-                with open(resolved_config_path, 'r') as f:
-                    config_content = f.read()
+                with open(local_temp_path, 'r') as f:
+                    ref_content = f.read()
 
-                # Parse the YAML content using OmegaConf
-                config_yaml = OmegaConf.create(yaml.safe_load(config_content))
-
-                # Resolve interpolation expressions
-                parsed_config = OmegaConf.to_container(config_yaml, resolve=True)
+                # Recursively parse the content of the referenced file
+                # Pass the *same* upload_id and the *new* base_path (relative dir of the referenced file)
+                ref_base_path = os.path.dirname(normalized_ref_path)
+                parsed_ref_config = parse_yaml_content(ref_content, upload_id=upload_id, base_path=ref_base_path)
 
                 # Replace the string reference with the parsed content
-                module_data['config'] = parsed_config
+                module_data['config'] = parsed_ref_config
+                module_data['_resolved_config_path'] = f"gs://{GCS_BUCKET_NAME}/{gcs_blob_name}" # Store GCS path
 
-                # Store the resolved config path for debugging
-                module_data['_resolved_config_path'] = resolved_config_path
             except Exception as e:
-                # Use the original path string in the error message for clarity
-                print(f"Error reading/parsing config reference '{original_config_path_str}' (resolved to '{resolved_config_path}') for module {module_name}: {e}")
-                # Set config to an error state
-                module_data['config'] = {'error': f"Error processing config file {original_config_path_str}: {e}"}
+                error_msg = f"Error reading/parsing config reference '{original_config_path_str}' (from GCS: {gcs_blob_name}): {e}"
+                tb_str = traceback.format_exc()
+                print(f"{error_msg}\n{tb_str}")
+                module_data['config'] = {'error': error_msg}
+            finally:
+                # Clean up the temporary local file used for this reference
+                cleanup_local_temp_file(local_temp_path)
 
     return config
 
-# Modified signature to accept root_temp_dir
-def process_yaml_file(file_path: str, root_temp_dir: Optional[str] = None) -> Dict[str, Any]:
+
+# Modified signature: accepts upload_id and relative_path
+def process_yaml_file(upload_id: str, relative_path: str) -> Dict[str, Any]:
     """
-    Load a YAML file, parse it, and resolve config references.
+    Download a specific YAML file from GCS based on upload_id and relative_path,
+    parse it, and resolve its config references within the GCS context.
 
     Args:
-        file_path: Absolute path to the YAML file to process.
-        root_temp_dir: The root temporary directory context, if applicable.
+        upload_id: The unique ID for the GCS upload context.
+        relative_path: The relative path of the YAML file within the GCS upload prefix.
 
     Returns:
-        Parsed YAML configuration with resolved interpolations and config references
+        Parsed YAML configuration or an error dictionary.
     """
-    # Get the base path (directory of the file being processed) for resolving relative paths within this file
-    base_path = os.path.dirname(file_path)
+    if not gcs_bucket:
+        return {'error': "GCS not configured on server", 'errorType': 'SERVER_ERROR'}
 
-    # Read the YAML file
-    with open(file_path, 'r') as f:
-        content = f.read()
+    gcs_blob_name = f"uploads/{upload_id}/{os.path.normpath(relative_path)}"
+    local_temp_path = None
 
-    # Parse the YAML content, passing both base_path and root_temp_dir
-    return parse_yaml_content(content, base_path, root_temp_dir)
+    try:
+        local_temp_path = download_gcs_blob_to_temp(gcs_blob_name)
+        if not local_temp_path:
+            # Return a specific error structure if file not found in GCS
+            return {
+                'error': f"File not found in GCS: {relative_path}",
+                'errorType': 'CONFIG_FILE_NOT_FOUND_GCS' # Specific type for route handler
+            }
+
+        # Read the content from the local temporary file
+        with open(local_temp_path, 'r') as f:
+            content = f.read()
+
+        # Parse the content, passing the upload_id and the relative directory of the file
+        base_path = os.path.dirname(relative_path)
+        return parse_yaml_content(content, upload_id=upload_id, base_path=base_path)
+
+    except Exception as e:
+        error_msg = f"Error processing YAML file from GCS ({gcs_blob_name}): {e}"
+        tb_str = traceback.format_exc()
+        print(f"{error_msg}\n{tb_str}")
+        return {'error': error_msg, 'errorType': 'PROCESSING_ERROR'}
+    finally:
+        # Clean up the main temporary local file
+        cleanup_local_temp_file(local_temp_path)
+
 
 def fetch_yaml_file(url: str) -> Dict[str, Any]:
     """
-    Fetch a YAML file from a URL, parse it, and resolve config references.
-
-    Args:
-        url: URL of the YAML file
-
-    Returns:
-        Parsed YAML configuration with resolved interpolations and config references
+    Fetch a YAML file from an external URL, parse it, and resolve config references.
+    NOTE: Assumes references within the fetched file are also external URLs or
+          self-contained. Does not use GCS context. Needs review if complex
+          external references are expected.
     """
-    # Get the base path for resolving relative paths (less reliable for URLs)
-    base_path = os.path.dirname(url)
+    try:
+        # Get the base path for resolving relative paths (less reliable for URLs)
+        base_path = os.path.dirname(url)
 
-    # Fetch the YAML file
-    response = requests.get(url)
-    response.raise_for_status()
-    content = response.text
+        # Fetch the YAML file
+        response = requests.get(url)
+        response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
+        content = response.text
 
-    # Parse the YAML content (no root_temp_dir context here)
-    return parse_yaml_content(content, base_path)
+        # Parse the YAML content - NO upload_id is passed, so references won't be resolved via GCS
+        # This assumes the external file is self-contained or references other public URLs
+        # parse_yaml_content needs to handle upload_id=None gracefully
+        return parse_yaml_content(content, base_path=base_path, upload_id=None)
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching URL {url}: {e}")
+        return {'error': f"Failed to fetch URL: {e}"}
+    except Exception as e:
+        print(f"Error processing fetched YAML from {url}: {e}")
+        return {'error': f"Error processing fetched YAML: {e}"}

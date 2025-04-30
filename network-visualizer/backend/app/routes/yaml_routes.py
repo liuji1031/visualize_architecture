@@ -1,521 +1,485 @@
-from flask import Blueprint, request, jsonify, session # Import session
+from flask import Blueprint, request, jsonify, make_response # Import make_response
 from werkzeug.utils import secure_filename
 import os
-import tempfile
-import traceback # Import traceback
+import tempfile # Still needed for local extraction before GCS upload
+import traceback
 import shutil
 import zipfile
 import io
-import glob # Added for file searching
-import yaml # Import yaml for parsing
+import glob # May still be useful for local temp processing
+import yaml
+import uuid # For generating unique upload IDs
+from google.cloud import storage # Import GCS client
 
 from ..services.yaml_service import (
     parse_yaml_content,
-    process_yaml_file, # Ensure this is imported
+    process_yaml_file, # This function will need significant changes
     fetch_yaml_file,
-    find_all_config_references,
-    find_config_references # Import find_config_references
+    find_all_config_references, # This might need GCS adaptation
+    find_config_references # This might need GCS adaptation
 )
+
+# --- GCS Configuration ---
+# Get bucket name from environment variable
+GCS_BUCKET_NAME = os.environ.get('GCS_BUCKET_NAME')
+if not GCS_BUCKET_NAME:
+    print("WARNING: GCS_BUCKET_NAME environment variable not set.")
+    # Optionally, raise an error or use a default for local dev?
+    # raise ValueError("GCS_BUCKET_NAME environment variable is required.")
+
+# Define a temporary directory for file uploads
+TEMP_UPLOAD_DIR = os.environ.get('TEMP_UPLOAD_DIR', '/tmp/yaml_uploads')
+# Ensure the directory exists
+os.makedirs(TEMP_UPLOAD_DIR, exist_ok=True)
+
+# Initialize GCS client (consider initializing within create_app or using Flask-Executor for background tasks)
+# For simplicity here, initialize globally. Ensure credentials are set up in the environment (e.g., GOOGLE_APPLICATION_CREDENTIALS).
+try:
+    storage_client = storage.Client()
+    gcs_bucket = storage_client.bucket(GCS_BUCKET_NAME) if GCS_BUCKET_NAME else None
+except Exception as e:
+    print(f"ERROR: Failed to initialize GCS client: {e}")
+    storage_client = None
+    gcs_bucket = None
+# --- End GCS Configuration ---
 
 # Create a blueprint for YAML routes
 yaml_bp = Blueprint('yaml', __name__, url_prefix='/api/yaml')
 
-@yaml_bp.route('/cleanup-temp', methods=['POST'])
-def cleanup_temp():
-    """
-    Clean up the temporary directory stored in the session.
-    
-    This endpoint deletes all files in the temporary directory
-    and removes the directory itself if it exists.
-    
-    Returns:
-        JSON response indicating success or failure
-    """
-    # Get the temporary directory from the session
-    temp_dir = session.get('upload_temp_dir')
-    
-    if not temp_dir:
-        return jsonify({'message': 'No temporary directory to clean up'}), 200
-    
+# --- Helper Function for GCS Upload ---
+def upload_to_gcs(local_file_path, gcs_blob_name):
+    """Uploads a file to the GCS bucket."""
+    if not gcs_bucket:
+        raise ConnectionError("GCS bucket not initialized.")
     try:
-        # Check if the directory exists
-        if os.path.exists(temp_dir) and os.path.isdir(temp_dir):
-            # Remove the directory and all its contents
-            shutil.rmtree(temp_dir)
-            print(f"Cleaned up temporary directory: {temp_dir}")
-        
-        # Remove the temporary directory from the session
-        session.pop('upload_temp_dir', None)
-        
-        return jsonify({'message': 'Temporary directory cleaned up successfully'}), 200
+        blob = gcs_bucket.blob(gcs_blob_name)
+        blob.upload_from_filename(local_file_path)
+        print(f"File {local_file_path} uploaded to gs://{GCS_BUCKET_NAME}/{gcs_blob_name}.")
+        return f"gs://{GCS_BUCKET_NAME}/{gcs_blob_name}" # Return the GCS URI
     except Exception as e:
-        error_message = f"Error cleaning up temporary directory: {str(e)}"
+        print(f"ERROR: Failed to upload {local_file_path} to GCS: {e}")
+        raise
+
+# --- Helper Function for GCS Cleanup ---
+def delete_gcs_prefix(prefix):
+    """Deletes all blobs in the GCS bucket with the given prefix."""
+    if not gcs_bucket:
+        print("WARNING: GCS bucket not initialized. Cannot delete prefix.")
+        return
+    try:
+        blobs = storage_client.list_blobs(GCS_BUCKET_NAME, prefix=prefix)
+        count = 0
+        for blob in blobs:
+            blob.delete()
+            count += 1
+        print(f"Deleted {count} blobs with prefix '{prefix}' from GCS bucket '{GCS_BUCKET_NAME}'.")
+    except Exception as e:
+        print(f"ERROR: Failed to delete GCS prefix '{prefix}': {e}")
+        # Don't raise, just log the error for cleanup
+
+# --- Helper Function for Local Temp Directory Cleanup ---
+def cleanup_temp_directory():
+    """
+    Cleans up the local temporary directory by removing all files in it.
+    This function is designed to be safe and not raise exceptions.
+    """
+    try:
+        # In Cloud Run, we should use a directory that's definitely writable
+        # /tmp is generally available in most container environments
+        if os.path.exists(TEMP_UPLOAD_DIR):
+            print(f"Attempting to clean up temporary directory: {TEMP_UPLOAD_DIR}")
+            try:
+                # Check if we have write permissions by creating a test file
+                test_file = os.path.join(TEMP_UPLOAD_DIR, '.test_write_permission')
+                with open(test_file, 'w') as f:
+                    f.write('test')
+                os.remove(test_file)
+                
+                # If we get here, we have write permissions
+                # Remove all files and subdirectories in the temp directory
+                for item in os.listdir(TEMP_UPLOAD_DIR):
+                    item_path = os.path.join(TEMP_UPLOAD_DIR, item)
+                    try:
+                        if os.path.isfile(item_path):
+                            os.unlink(item_path)
+                        elif os.path.isdir(item_path):
+                            shutil.rmtree(item_path)
+                    except Exception as item_error:
+                        print(f"WARNING: Could not remove {item_path}: {item_error}")
+                        # Continue with other files even if one fails
+                        continue
+                print(f"Successfully cleaned up temporary directory: {TEMP_UPLOAD_DIR}")
+            except Exception as perm_error:
+                print(f"WARNING: No write permission for {TEMP_UPLOAD_DIR}: {perm_error}")
+                # Don't try to create or clean if we don't have permissions
+        else:
+            # Create the directory if it doesn't exist
+            try:
+                os.makedirs(TEMP_UPLOAD_DIR, exist_ok=True)
+                print(f"Created temporary directory: {TEMP_UPLOAD_DIR}")
+            except Exception as mkdir_error:
+                print(f"WARNING: Could not create directory {TEMP_UPLOAD_DIR}: {mkdir_error}")
+                # If we can't create the directory, we'll use tempfile.mkdtemp() later
+    except Exception as e:
+        print(f"WARNING: Failed to clean up temporary directory {TEMP_UPLOAD_DIR}: {e}")
+        # Don't raise, just log the warning
+
+# --- Modified Routes ---
+
+# Renamed from /cleanup-temp
+@yaml_bp.route('/cleanup-upload', methods=['POST'])
+def cleanup_upload():
+    """
+    Clean up the GCS objects associated with a specific upload ID.
+    Request body:
+        uploadId: The unique ID for the upload session.
+    """
+    data = request.json
+    upload_id = data.get('uploadId')
+
+    if not upload_id:
+        return jsonify({'error': 'No uploadId provided'}), 400
+
+    if not gcs_bucket:
+         return jsonify({'error': 'GCS not configured on server'}), 500
+
+    gcs_prefix = f"uploads/{upload_id}/"
+    try:
+        delete_gcs_prefix(gcs_prefix)
+        return jsonify({'message': f'Upload context {upload_id} cleaned up successfully'}), 200
+    except Exception as e:
+        error_message = f"Error cleaning up GCS upload context {upload_id}: {str(e)}"
         print(error_message)
         return jsonify({'error': error_message}), 500
 
 @yaml_bp.route('/parse', methods=['POST'])
 def parse():
     """
-    Parse YAML content provided in the request body.
-
-    Request body:
-        content: YAML content as a string
-
-    Returns:
-        Parsed YAML configuration with resolved interpolations and config references
+    Parse YAML content provided in the request body. (No GCS interaction needed here)
     """
     data = request.json
-
     if not data or 'content' not in data:
         return jsonify({'error': 'No content provided'}), 400
-
     try:
-        # Parse the YAML content (no root_temp_dir context here)
+        # Parse the YAML content directly (no GCS context)
+        # Assuming parse_yaml_content doesn't need GCS for direct parsing
         config = parse_yaml_content(data['content'])
-
         return jsonify(config)
     except Exception as e:
         error_message = f"Error parsing YAML content: {str(e)}"
         print(error_message)
         return jsonify({'error': error_message}), 500
 
+# /check-references might be less useful now, as references are resolved dynamically from GCS.
+# Keeping it for now, but it only checks the main file locally.
 @yaml_bp.route('/check-references', methods=['POST'])
 def check_references():
     """
-    Check a YAML file for references to other YAML files.
-
-    Request body:
-        file: YAML file to check
-
-    Returns:
-        List of paths to all referenced YAML files
+    Check a single YAML file (locally) for references.
+    NOTE: This does not check references within the GCS context.
     """
     if 'file' not in request.files:
         return jsonify({'error': 'No file provided'}), 400
-
     file = request.files['file']
-
     if file.filename == '':
         return jsonify({'error': 'No file selected'}), 400
 
-    file_path = None # Initialize file_path to ensure it's defined in finally
+    local_temp_dir = None
+    file_path = None
     try:
-        # Save the file to a temporary location
+        local_temp_dir = tempfile.mkdtemp()
         filename = secure_filename(file.filename)
-        temp_dir = tempfile.gettempdir() # Use system default temp dir
-        file_path = os.path.join(temp_dir, filename)
+        file_path = os.path.join(local_temp_dir, filename)
         file.save(file_path)
-
-        print(f"Checking references in uploaded YAML file: {file_path}")
-
-        # Find all referenced files
-        references = find_all_config_references(file_path)
-
-        # Remove the uploaded file from the list of references
+        print(f"Checking references in temporary local file: {file_path}")
+        # find_all_config_references needs adaptation for GCS if it's to be fully functional
+        # For now, it only checks the main file locally.
+        references = find_all_config_references(file_path) # This likely needs GCS context
         if file_path in references:
             references.remove(file_path)
-
-        # Return the list of referenced files
-        return jsonify({
-            'references': references,
-            'count': len(references)
-        })
+        return jsonify({'references': references, 'count': len(references)})
     except Exception as e:
         error_message = f"Error checking references in YAML file: {str(e)}"
         print(error_message)
         return jsonify({'error': error_message}), 500
     finally:
-        # Clean up the temporary file
-        if file_path and os.path.exists(file_path):
+        if local_temp_dir and os.path.exists(local_temp_dir):
             try:
-                os.remove(file_path)
+                shutil.rmtree(local_temp_dir)
             except Exception as cleanup_error:
-                 print(f"Error cleaning up temp file {file_path}: {cleanup_error}")
+                 print(f"Error cleaning up local temp dir {local_temp_dir}: {cleanup_error}")
 
-
-def copy_referenced_files(file_path, temp_dir, project_root=None):
-    """
-    Find all referenced files in a YAML file and copy them to the temporary directory.
-    
-    Args:
-        file_path: Path to the YAML file
-        temp_dir: Temporary directory to copy files to
-        project_root: Root directory of the project to search for referenced files
-        
-    Returns:
-        List of files that couldn't be found
-    """
-    try:
-        # Get the base path for resolving relative paths
-        base_path = os.path.dirname(file_path)
-        
-        # Read the YAML file
-        with open(file_path, 'r') as f:
-            content = f.read()
-            
-        # Parse the YAML content
-        config = yaml.safe_load(content)
-        
-        # Find all referenced files
-        references = find_config_references(config, base_path)
-        
-        missing_files = []
-        
-        # Copy each referenced file to the temporary directory
-        for module_name, ref_path in references:
-            # Get the relative path from the reference
-            if os.path.exists(ref_path):
-                # Determine the relative path within the project
-                if project_root and ref_path.startswith(project_root):
-                    rel_path = os.path.relpath(ref_path, project_root)
-                else:
-                    # If we can't determine a clean relative path, use the filename
-                    rel_path = os.path.basename(ref_path)
-                
-                # Create the target directory in the temp dir
-                target_dir = os.path.dirname(os.path.join(temp_dir, rel_path))
-                os.makedirs(target_dir, exist_ok=True)
-                
-                # Copy the file
-                target_path = os.path.join(temp_dir, rel_path)
-                shutil.copy2(ref_path, target_path)
-                print(f"Copied referenced file: {ref_path} -> {target_path}")
-                
-                # Recursively copy referenced files from this file
-                nested_missing = copy_referenced_files(target_path, temp_dir, project_root)
-                missing_files.extend(nested_missing)
-            else:
-                print(f"Warning: Referenced file not found: {ref_path}")
-                missing_files.append((module_name, ref_path))
-                
-        return missing_files
-    except Exception as e:
-        print(f"Error copying referenced files: {e}")
-        return []
+# Removed copy_referenced_files function as it's GCS specific now and handled differently
 
 @yaml_bp.route('/upload', methods=['POST'])
 def upload():
     """
-    Upload and process a YAML file with improved handling of references.
+    Upload a single YAML file to GCS and process it.
 
     Request body:
         file: YAML file to upload
-        auto_upload_references: Whether to automatically upload referenced files
 
     Returns:
-        Parsed YAML configuration with resolved interpolations and config references
+        JSON object containing the processed config and the uploadId.
     """
+    # Try to clean up the temporary directory before processing a new upload
+    # But don't fail if cleanup fails
+    try:
+        cleanup_temp_directory()
+    except Exception as e:
+        print(f"WARNING: Temp directory cleanup failed but continuing: {e}")
+    
+    if not gcs_bucket:
+         return jsonify({'error': 'GCS not configured on server'}), 500
     if 'file' not in request.files:
         return jsonify({'error': 'No file provided'}), 400
-
     file = request.files['file']
-
     if file.filename == '':
         return jsonify({'error': 'No file selected'}), 400
 
-    # Check if auto_upload_references is enabled
-    auto_upload_references = request.form.get('auto_upload_references', 'true').lower() == 'true'
+    upload_id = str(uuid.uuid4())
+    gcs_prefix = f"uploads/{upload_id}/"
+    original_filename = secure_filename(file.filename)
+    gcs_blob_name = f"{gcs_prefix}{original_filename}"
 
-    temp_dir = None  # Initialize temp_dir
-    file_path = None  # Initialize file_path
+    local_temp_dir = None
+    local_file_path = None
     try:
-        # Create a temporary directory for this upload
-        temp_dir = tempfile.mkdtemp()
-        print(f"Created temporary directory for upload: {temp_dir}")
-        
-        # Get the original filename
-        original_filename = secure_filename(file.filename)
-        
-        # Save the file to the temporary directory
-        file_path = os.path.join(temp_dir, original_filename)
-        file.save(file_path)
-        print(f"Saved uploaded file to: {file_path}")
-        
-        # If auto_upload_references is enabled, try to find and copy referenced files
-        missing_references = []
-        if auto_upload_references:
-            # Try to find the project root directory
-            project_root = os.getcwd()  # Default to current working directory
-            
-            # Look for the file in the project directory
-            for root, dirs, files in os.walk(project_root):
-                for name in files:
-                    if name == original_filename:
-                        found_path = os.path.join(root, name)
-                        # If we found the file in the project, use its directory as base
-                        if os.path.exists(found_path):
-                            print(f"Found matching file in project: {found_path}")
-                            # Copy referenced files
-                            missing_references = copy_referenced_files(file_path, temp_dir, project_root)
-                            break
-                if missing_references:  # Break outer loop if we've processed references
-                    break
-        
-        print(f"Processing uploaded YAML file: {file_path}")
-        
-        # Process the YAML file with the temp_dir as root_temp_dir
-        config = process_yaml_file(file_path, root_temp_dir=temp_dir)
-        
-        # Check for embedded errors
+        # Save locally temporarily to upload to GCS
+        local_temp_dir = tempfile.mkdtemp()
+        local_file_path = os.path.join(local_temp_dir, original_filename)
+        file.save(local_file_path)
+
+        # Upload the main file to GCS
+        gcs_uri = upload_to_gcs(local_file_path, gcs_blob_name)
+        print(f"Uploaded main file to: {gcs_uri}")
+
+        # Process the YAML file using its GCS path/upload_id
+        # process_yaml_file needs to be adapted for GCS
+        # It should accept upload_id and the relative path (original_filename here)
+        config = process_yaml_file(upload_id=upload_id, relative_path=original_filename)
+
+        # Check for embedded errors (assuming process_yaml_file returns them similarly)
         processing_errors = []
         if isinstance(config, dict) and 'modules' in config:
             for module_name, module_data in config['modules'].items():
-                if isinstance(module_data, dict) and isinstance(module_data.get('config'), dict) and 'error' in module_data['config']:
-                    processing_errors.append({
-                        'module': module_name,
-                        'error': module_data['config']['error']
-                    })
-        
-        # Add missing references to processing errors
-        for module_name, ref_path in missing_references:
-            processing_errors.append({
-                'module': module_name,
-                'error': f"Referenced file not found: {ref_path}"
-            })
-        
+                 if isinstance(module_data, dict) and isinstance(module_data.get('config'), dict) and 'error' in module_data['config']:
+                      processing_errors.append({
+                          'module': module_name,
+                          'error': module_data['config']['error']
+                      })
         if processing_errors:
             print(f"Found errors during processing: {processing_errors}")
+            # Clean up GCS on error
+            delete_gcs_prefix(gcs_prefix)
             return jsonify({'error': 'Errors occurred during YAML processing.', 'details': processing_errors}), 422
-        
-        # Store the temp directory in the session for future reference
-        print(f"Attempting to set session['upload_temp_dir'] = {temp_dir}")
-        session['upload_temp_dir'] = temp_dir
-        print(f"Stored temp_dir in session after successful processing.")
-        
-        return jsonify(config)
+
+        # Return config and the upload ID with CORS header
+        response = make_response(jsonify({'config': config, 'uploadId': upload_id}))
+        response.headers['Access-Control-Allow-Origin'] = 'https://network-visualizer-36300.web.app' # Or '*' for testing, but specific is better
+        return response
+
     except Exception as e:
-        error_message = f"Error processing YAML file: {str(e)}"
-        # Log the full traceback for detailed debugging
+        error_message = f"Error processing single YAML upload: {str(e)}"
         tb_str = traceback.format_exc()
         print(f"{error_message}\nTraceback:\n{tb_str}")
-        
-        # Clean up the temporary directory on error
-        if temp_dir and os.path.exists(temp_dir):
-            try:
-                shutil.rmtree(temp_dir)
-                print(f"Cleaned up temp_dir {temp_dir} after error.")
-            except Exception as cleanup_error:
-                print(f"Error cleaning up temp_dir {temp_dir} after error: {cleanup_error}")
-        
+        # Clean up GCS on error
+        delete_gcs_prefix(gcs_prefix)
         return jsonify({'error': error_message}), 500
+    finally:
+        # Clean up local temporary directory
+        if local_temp_dir and os.path.exists(local_temp_dir):
+            try:
+                shutil.rmtree(local_temp_dir)
+            except Exception as cleanup_error:
+                print(f"Error cleaning up local temp dir {local_temp_dir}: {cleanup_error}")
 
 
 @yaml_bp.route('/upload-folder', methods=['POST'])
 def upload_folder():
     """
-    Upload a folder of YAML files (as a zip file), process the main YAML file,
-    and store the temporary directory context in the session.
+    Upload a folder (zip), extract locally, upload contents to GCS, process main file.
 
     Request body:
         zip_file: Zip file containing YAML files
         main_file: Path to the main YAML file within the zip file
 
     Returns:
-        Parsed YAML configuration with resolved interpolations and config references
+        JSON object containing the processed config and the uploadId.
     """
+    # Try to clean up the temporary directory before processing a new upload
+    # But don't fail if cleanup fails
+    try:
+        cleanup_temp_directory()
+    except Exception as e:
+        print(f"WARNING: Temp directory cleanup failed but continuing: {e}")
+    
+    if not gcs_bucket:
+         return jsonify({'error': 'GCS not configured on server'}), 500
     if 'zip_file' not in request.files:
         return jsonify({'error': 'No zip file provided'}), 400
-
-    zip_file = request.files['zip_file']
-
-    if zip_file.filename == '':
+    zip_file_storage = request.files['zip_file']
+    if zip_file_storage.filename == '':
         return jsonify({'error': 'No file selected'}), 400
 
-    # Get the main file path relative to the zip root
-    main_file = request.form.get('main_file', '')
-    if main_file == '':
+    main_file_relative = request.form.get('main_file', '')
+    if not main_file_relative:
         return jsonify({'error': 'No main file specified'}), 400
 
-    temp_dir = None # Initialize temp_dir
+    upload_id = str(uuid.uuid4())
+    gcs_prefix = f"uploads/{upload_id}/"
+    local_extract_dir = None
+
     try:
-        # Create a temporary directory to extract the zip file
-        temp_dir = tempfile.mkdtemp()
+        # Create a temporary directory for local extraction
+        local_extract_dir = tempfile.mkdtemp()
+        print(f"Extracting zip file locally to: {local_extract_dir}")
 
-        print(f"Extracting zip file to: {temp_dir}")
+        # Extract the zip file locally
+        with zipfile.ZipFile(zip_file_storage, 'r') as zip_ref:
+            zip_ref.extractall(local_extract_dir)
 
-        # Extract the zip file
-        with zipfile.ZipFile(zip_file, 'r') as zip_ref:
-            zip_ref.extractall(temp_dir)
+        # Check if main file exists locally after extraction
+        local_main_file_path = os.path.join(local_extract_dir, main_file_relative)
+        if not os.path.exists(local_main_file_path):
+            return jsonify({'error': f'Main file not found in zip: {main_file_relative}'}), 400
 
-        # Get the full path to the main YAML file within the temp directory
-        main_file_path = os.path.join(temp_dir, main_file)
+        # Upload all extracted files to GCS under the upload_id prefix
+        print(f"Uploading extracted files to GCS prefix: {gcs_prefix}")
+        for root, _, files in os.walk(local_extract_dir):
+            for filename in files:
+                local_path = os.path.join(root, filename)
+                # Calculate relative path within the extracted structure
+                relative_path = os.path.relpath(local_path, local_extract_dir)
+                gcs_blob_name = f"{gcs_prefix}{relative_path}"
+                upload_to_gcs(local_path, gcs_blob_name)
 
-        if not os.path.exists(main_file_path):
-             # Clean up before returning error
-            if temp_dir and os.path.exists(temp_dir):
-                shutil.rmtree(temp_dir)
-            return jsonify({'error': f'Main file not found: {main_file}'}), 400
+        print(f"Processing main YAML file via GCS context: {main_file_relative}")
+        # Process the main YAML file using the upload_id and its relative path
+        # process_yaml_file needs adaptation for GCS
+        config = process_yaml_file(upload_id=upload_id, relative_path=main_file_relative)
 
-        print(f"Processing main YAML file: {main_file_path}")
-
-        # Process the main YAML file, passing temp_dir as root_temp_dir
-        # This allows resolve_config_references to prioritize paths relative to temp_dir
-        config = process_yaml_file(main_file_path, root_temp_dir=temp_dir)
-
-        # Check for embedded errors from resolve_config_references
+        # Check for embedded errors
         processing_errors = []
         if isinstance(config, dict) and 'modules' in config:
-            for module_name, module_data in config['modules'].items():
-                 if isinstance(module_data, dict) and isinstance(module_data.get('config'), dict) and 'error' in module_data['config']:
-                      processing_errors.append({
-                          'module': module_name,
-                          'error': module_data['config']['error']
-                      })
-
+             for module_name, module_data in config['modules'].items():
+                  if isinstance(module_data, dict) and isinstance(module_data.get('config'), dict) and 'error' in module_data['config']:
+                       processing_errors.append({
+                           'module': module_name,
+                           'error': module_data['config']['error']
+                       })
         if processing_errors:
-            print(f"Found errors during initial processing: {processing_errors}")
-            # Clean up the temp directory as the upload is considered failed
-            if temp_dir and os.path.exists(temp_dir):
-                 try:
-                     shutil.rmtree(temp_dir)
-                     print(f"Cleaned up temp_dir {temp_dir} due to processing errors.")
-                 except Exception as cleanup_error:
-                     print(f"Error cleaning up temp_dir {temp_dir} after processing errors: {cleanup_error}")
-            # Return a 422 error indicating processing issues
+            print(f"Found errors during processing: {processing_errors}")
+            # Clean up GCS on error
+            delete_gcs_prefix(gcs_prefix)
             return jsonify({'error': 'Errors occurred during YAML processing.', 'details': processing_errors}), 422
 
-        # If no errors, store only the root temp directory path in the session
-        print(f"Attempting to set session['upload_temp_dir'] = {temp_dir}")
-        session['upload_temp_dir'] = temp_dir
-        print(f"Stored temp_dir in session after successful processing.")
-
-        return jsonify(config) # Return 200 OK
+        # Return config and the upload ID with CORS header
+        response = make_response(jsonify({'config': config, 'uploadId': upload_id}))
+        response.headers['Access-Control-Allow-Origin'] = 'https://network-visualizer-36300.web.app' # Or '*' for testing, but specific is better
+        return response
 
     except Exception as e:
-        error_message = f"Error processing YAML folder: {str(e)}"
-        # Log the full traceback for detailed debugging
+        error_message = f"Error processing YAML folder upload: {str(e)}"
         tb_str = traceback.format_exc()
         print(f"{error_message}\nTraceback:\n{tb_str}")
-        # Ensure temp_dir exists before trying to clean up on error
-        if temp_dir and os.path.exists(temp_dir):
-             try:
-                 shutil.rmtree(temp_dir)
-                 print(f"Cleaned up temp_dir {temp_dir} after error.")
-             except Exception as cleanup_error:
-                 print(f"Error cleaning up temp_dir {temp_dir} after error: {cleanup_error}")
+        # Clean up GCS on error
+        delete_gcs_prefix(gcs_prefix)
         return jsonify({'error': error_message}), 500
-    # No finally block needed here as cleanup is handled on error or needs separate strategy for success
+    finally:
+        # Clean up local extraction directory
+        if local_extract_dir and os.path.exists(local_extract_dir):
+            try:
+                shutil.rmtree(local_extract_dir)
+            except Exception as cleanup_error:
+                print(f"Error cleaning up local extract dir {local_extract_dir}: {cleanup_error}")
 
 
-# Renamed from /fetch, now handles relative paths within the session's temp dir
 @yaml_bp.route('/get-subgraph', methods=['POST'])
 def get_subgraph():
     """
-    Fetch and process a YAML file using a relative path within the
-    temporary directory stored in the session.
+    Fetch and process a referenced YAML file from GCS using the upload context.
 
     Request body:
-        relativePath: Relative path to the YAML file within the temp upload directory.
-
-    Returns:
-        Parsed YAML configuration with resolved interpolations and config references.
+        uploadId: The unique ID for the upload session.
+        relativePath: Relative path to the YAML file within the GCS upload prefix.
+        moduleName: (Optional) Name of the module requesting the subgraph.
     """
-    data = request.json
-    relative_path = data.get('relativePath') # e.g., "block.yaml" or "inception/block.yaml"
+    if not gcs_bucket:
+         return jsonify({'error': 'GCS not configured on server'}), 500
 
+    data = request.json
+    upload_id = data.get('uploadId')
+    relative_path = data.get('relativePath') # e.g., "block.yaml" or "inception/block.yaml"
+    module_name = data.get('moduleName', 'ComposableModel') # Used for error reporting
+
+    if not upload_id:
+        return jsonify({'error': 'No uploadId provided'}), 400
     if not relative_path:
         return jsonify({'error': 'No relativePath provided'}), 400
 
-    # Retrieve the root temporary directory from the session
-    print(f"Session contents on /get-subgraph entry: {dict(session)}")
-    temp_dir = session.get('upload_temp_dir')
-
-    # Check if temp_dir is valid
-    if not temp_dir or not os.path.isdir(temp_dir):
-         print(f"Error: upload_temp_dir '{temp_dir}' not found in session or is not a directory.")
-         return jsonify({'error': 'No active upload context found or context is invalid. Please upload the folder again.'}), 400
-
     try:
-        # --- IMPROVED FILE SEARCH LOGIC ---
-        # 1. First try direct path (relative to temp_dir)
-        direct_path = os.path.normpath(os.path.join(temp_dir, relative_path))
-        
-        # 2. If direct path doesn't exist, try to find the file by name anywhere in the temp_dir
-        if os.path.exists(direct_path):
-            found_path = direct_path
-            print(f"Found file at direct path: {found_path}")
-        else:
-            # Extract just the filename from the relative path
-            filename = os.path.basename(relative_path)
-            
-            # Use glob to find all files with this name in the temp_dir
-            pattern = os.path.join(temp_dir, '**', filename)
-            matching_files = glob.glob(pattern, recursive=True)
-            
-            print(f"Searching for '{filename}' in '{temp_dir}', found: {matching_files}")
-            
-            if not matching_files:
-                print(f"Error: File '{filename}' not found anywhere in temp dir '{temp_dir}'")
-                # Extract module name from the request data if available
-                module_name = data.get('moduleName', 'ComposableModel')
-                return jsonify({
-                    'error': f'Subgraph file not found: {relative_path}',
-                    'errorType': 'CONFIG_FILE_NOT_FOUND',
-                    'configPath': relative_path,
-                    'moduleName': module_name
-                }), 404
-            
-            if len(matching_files) > 1:
-                print(f"Warning: Multiple files named '{filename}' found in temp dir. Using the first one: {matching_files[0]}")
-            
-            found_path = matching_files[0]
-        
-        # Security check: Ensure the found path is within the temp directory
-        abs_temp_dir = os.path.abspath(temp_dir)
-        if not os.path.abspath(found_path).startswith(abs_temp_dir + os.sep):
-            print(f"Error: Found path '{found_path}' is outside temp dir '{abs_temp_dir}'.")
-            return jsonify({'error': 'Invalid file path resolved.'}), 400
-        
-        print(f"Processing subgraph file: {found_path}")
-        
-        # Process the YAML file using the found path, passing temp_dir as root_temp_dir
-        config = process_yaml_file(found_path, root_temp_dir=temp_dir)
+        print(f"Processing subgraph request for uploadId: {upload_id}, path: {relative_path}")
 
-        # Check for embedded errors from resolve_config_references
+        # Process the YAML file using the upload_id and relative path
+        # process_yaml_file needs adaptation for GCS
+        config = process_yaml_file(upload_id=upload_id, relative_path=relative_path)
+
+        # Check for embedded errors (including file not found within GCS context)
         processing_errors = []
-        if isinstance(config, dict) and 'modules' in config:
-            for module_name, module_data in config['modules'].items():
-                 if isinstance(module_data, dict) and isinstance(module_data.get('config'), dict) and 'error' in module_data['config']:
-                      processing_errors.append({
-                          'module': module_name,
-                          'error': module_data['config']['error']
-                      })
+        if isinstance(config, dict):
+            if config.get('errorType') == 'CONFIG_FILE_NOT_FOUND_GCS':
+                 # Specific error from GCS processing
+                 return jsonify({
+                     'error': config.get('error', f'Subgraph file not found in GCS: {relative_path}'),
+                     'errorType': 'CONFIG_FILE_NOT_FOUND', # Keep consistent for frontend
+                     'configPath': relative_path,
+                     'moduleName': module_name
+                 }), 404
+            elif 'modules' in config:
+                 # Check for errors within modules after processing
+                 for mod_name, module_data in config['modules'].items():
+                      if isinstance(module_data, dict) and isinstance(module_data.get('config'), dict) and 'error' in module_data['config']:
+                           processing_errors.append({
+                               'module': mod_name,
+                               'error': module_data['config']['error']
+                           })
 
         if processing_errors:
              print(f"Found errors during subgraph processing: {processing_errors}")
-             # Return a 422 error indicating processing issues
              return jsonify({'error': 'Errors occurred during subgraph YAML processing.', 'details': processing_errors}), 422
 
         return jsonify(config) # Return 200 OK
+
+    except FileNotFoundError: # Catch specific error if process_yaml_file raises it for GCS not found
+         print(f"Error: File not found in GCS for uploadId: {upload_id}, path: {relative_path}")
+         return jsonify({
+             'error': f'Subgraph file not found: {relative_path}',
+             'errorType': 'CONFIG_FILE_NOT_FOUND',
+             'configPath': relative_path,
+             'moduleName': module_name
+         }), 404
     except Exception as e:
-        error_message = f"Error processing subgraph file '{relative_path}': {str(e)}"
-        print(error_message)
+        error_message = f"Error processing subgraph file '{relative_path}' for upload {upload_id}: {str(e)}"
+        tb_str = traceback.format_exc()
+        print(f"{error_message}\nTraceback:\n{tb_str}")
         return jsonify({'error': error_message}), 500
 
-# Keep the original /fetch route for potential external URL fetching if needed
-# It might need adjustments based on how resolve_config_references handles non-file paths
+
+# /fetch remains for external URLs, no GCS context needed
 @yaml_bp.route('/fetch', methods=['POST'])
 def fetch():
     """
     Fetch a YAML file from a URL and process it.
-
-    Request body:
-        url: URL of the YAML file
-
-    Returns:
-        Parsed YAML configuration with resolved interpolations and config references
     """
     data = request.json
-
     if not data or 'url' not in data:
         return jsonify({'error': 'No URL provided'}), 400
-
     try:
         print(f"Fetching YAML file from URL: {data['url']}")
-
-        # Fetch and process the YAML file (root_temp_dir is None here)
+        # fetch_yaml_file might also need adaptation if it resolves internal references
+        # Assuming it's only for self-contained external files for now
         config = fetch_yaml_file(data['url'])
-
         return jsonify(config)
     except Exception as e:
         error_message = f"Error fetching YAML file: {str(e)}"
