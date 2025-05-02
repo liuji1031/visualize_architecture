@@ -57,7 +57,7 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
   const [folderFiles, setFolderFiles] = useState<string[]>([]);
   const [zipFile, setZipFile] = useState<File | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [showEdgeLabels, setShowEdgeLabels] = useState<boolean>(true); // State for toggle
+  const [showEdgeLabels, setShowEdgeLabels] = useState<boolean>(false); // Default to false
   const [currentUploadId, setCurrentUploadId] = useState<string | null>(null); // State for upload ID
 
   type GraphState = { nodes: Node[]; edges: Edge[]; config?: YamlConfig };
