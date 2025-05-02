@@ -220,9 +220,9 @@ def resolve_config_references(config: Dict[str, Any], upload_id: Optional[str], 
 
             # --- If not ComposableModel, attempt download and parse ---
             if not found_in_gcs:
-                error_msg = f"Config file '{original_config_path_str}' (-> {gcs_blob_name}) not found in GCS upload context {upload_id}."
-                print(f"Error: {error_msg}")
-                module_data['config'] = {'error': error_msg}
+                print(f"Warning: Config file '{original_config_path_str}' (-> {gcs_blob_name}) not found in GCS upload context {upload_id}. Keeping original path.")
+                # Keep the original path string instead of setting an error
+                module_data['config'] = original_config_path_str
                 continue
 
             # File found in GCS, download and process
@@ -248,7 +248,9 @@ def resolve_config_references(config: Dict[str, Any], upload_id: Optional[str], 
                 error_msg = f"Error reading/parsing config reference '{original_config_path_str}' (from GCS: {gcs_blob_name}): {e}"
                 tb_str = traceback.format_exc()
                 print(f"{error_msg}\n{tb_str}")
-                module_data['config'] = {'error': error_msg}
+                # Keep the original path string instead of setting an error
+                print(f"Warning: Error processing config file '{original_config_path_str}'. Keeping original path.")
+                module_data['config'] = original_config_path_str
             finally:
                 # Clean up the temporary local file used for this reference
                 cleanup_local_temp_file(local_temp_path)
