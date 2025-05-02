@@ -1,7 +1,8 @@
 import React, { memo, useState, useCallback } from 'react';
-import { Handle, Position, NodeProps } from 'reactflow';
+import { Handle, Position, NodeProps, Node } from 'reactflow'; // Import Node type
 import { ModuleNodeData } from '../types';
 import yaml from 'js-yaml';
+import { getNodeBackgroundColor, nodeTypeStyles } from '../utils/colorUtils'; // Import color utils
 
 // Styles for the custom node (Simplified)
 const nodeStyles: React.CSSProperties = {
@@ -18,48 +19,6 @@ const nodeStyles: React.CSSProperties = {
   // Removed the double-box effect by ensuring no extra borders or shadows are implicitly added
   // Background color will be set based on type/cls
   position: 'relative', // Needed for absolute positioning of handles
-};
-
-// Function to generate a consistent hash from a string
-const hashString = (str: string): number => {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash; // Convert to 32bit integer
-  }
-  return Math.abs(hash);
-};
-
-// Function to generate a color based on a class name
-const generateColorFromCls = (cls: string): string => {
-  const hash = hashString(cls);
-  
-  // Use HSL color model for better control over saturation and lightness
-  // Hue: 0-360 (full color spectrum)
-  // Saturation: 25-45% (not too saturated)
-  // Lightness: 75-85% (light enough for text readability)
-  const hue = hash % 360;
-  const saturation = 50 + (hash % 20); // 50-70%
-  const lightness = 75 + (hash % 10); // 75-85%
-  
-  return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
-};
-
-// Different styles for different node types
-const nodeTypeStyles = {
-  entry: {
-    backgroundColor: '#a2c3fa',
-    borderColor: '#949494'
-  },
-  exit: {
-    backgroundColor: '#ffc891',
-    borderColor: '#949494'
-  },
-  default: {
-    backgroundColor: '#f2c496',
-    borderColor: '#949494'
-  }
 };
 
 // Handle styles (Adjusted for top/bottom)
@@ -100,30 +59,12 @@ interface CustomNodeProps extends NodeProps<ModuleNodeData> {
 
 const CustomNode: React.FC<CustomNodeProps> = ({ data, isConnectable, id, ...props }) => { // Destructure props to get onNodeDoubleClick
   const { label, cls, isEntry, isExit, outNum = 1, config } = data;
-  const [showTooltip, setShowTooltip] = useState(false);
+  // const [showTooltip, setShowTooltip] = useState(false); // Removed state
   const { onNodeDoubleClick } = props; // Get the callback from props
 
-  // Determine node type for styling
-  const nodeType = isEntry ? 'entry' : isExit ? 'exit' : 'default';
-  
-  // Generate style based on cls for non-entry/exit nodes
-  let nodeStyle = nodeTypeStyles[nodeType];
-  if (!isEntry && !isExit && (cls || label)) { // Check for label as well for ComposableModel
-    if (cls === 'ComposableModel') {
-      // For ComposableModel, hash color based on the module name (label)
-      nodeStyle = {
-        ...nodeTypeStyles.default,
-        backgroundColor: generateColorFromCls(label) // Use label for color hashing
-      };
-    } else if (cls) {
-      // For other nodes with a cls, use the color generated from cls
-      nodeStyle = {
-        ...nodeTypeStyles.default,
-        backgroundColor: generateColorFromCls(cls)
-      };
-    }
-    // If neither cls nor label is present (unlikely for non-entry/exit), it keeps the default style
-  }
+  // Get background color using the utility function
+  const backgroundColor = getNodeBackgroundColor(data);
+  const borderColor = nodeTypeStyles.default.borderColor; // Assuming border color is consistent
   
   // Calculate the number of input and output handles
   let inputCount = 0;
@@ -159,10 +100,11 @@ const CustomNode: React.FC<CustomNodeProps> = ({ data, isConnectable, id, ...pro
   // Calculate the node width based on the maximum number of handles
   const nodeWidth = 100 + maxHandles * 25; // Adjust width based on handles
 
-  // Create the style with dynamic width
+  // Create the style with dynamic width and calculated background color
   const style = {
     ...nodeStyles,
-    ...nodeStyle,
+    backgroundColor: backgroundColor,
+    borderColor: borderColor,
     width: `${nodeWidth}px`,
     // Height can be auto or fixed, let's try auto first
     height: 'auto', // Let height adjust to content + padding
@@ -411,13 +353,18 @@ const CustomNode: React.FC<CustomNodeProps> = ({ data, isConnectable, id, ...pro
     }
   }, [id, cls, config, onNodeDoubleClick, label]);
   
+  // Format config for display in YAML format
+  const formattedConfig = formatConfig(config);
+
   return (
     <div 
       style={style}
-      onMouseEnter={() => setShowTooltip(true)}
-      onMouseLeave={() => setShowTooltip(false)}
+      // onMouseEnter={() => setShowTooltip(true)} // Removed handler
+      // onMouseLeave={() => setShowTooltip(false)} // Removed handler
       onDoubleClick={handleDoubleClick} // Add double click handler
       data-testid={`node-${id}`}
+      data-tooltip-id="node-tooltip" // Added for react-tooltip
+      data-tooltip-content={formattedConfig} // Added for react-tooltip
     >
       {/* Simplified inner div */}
       <div style={{
@@ -431,18 +378,7 @@ const CustomNode: React.FC<CustomNodeProps> = ({ data, isConnectable, id, ...pro
         <div style={{ fontWeight: 'bold' }}>{label}</div>
         {cls && <div style={{ fontSize: '10px' }}>{cls}</div>}
         
-        {/* Config tooltip */}
-        {showTooltip && config && (
-          <div style={{
-            ...tooltipStyles,
-            // Dynamic positioning to prevent tooltip from going off-screen
-            left: '100%', // Default position to the right of the node
-            right: 'auto', // Reset right position
-          }}>
-            <div style={{ fontWeight: 'bold', marginBottom: '5px' }}>Configuration:</div>
-            <pre style={{ margin: 0 }}>{formatConfig(config)}</pre>
-          </div>
-        )}
+        {/* Removed inline tooltip div */}
       </div>
       
       {renderInputHandles()}

@@ -26,3 +26,13 @@ code {
 .react-flow__attribution {
   display: none;
 }
+
+/* Position MiniMap relative to viewport, next to the top-left panel */
+.react-flow__minimap {
+  top: 2px !important;  /* Align with panel's top padding */
+  /* Assuming panel is at left: 10px and has width ~150px, plus 10px margin */
+  left: 170px !important; 
+  transform: none !important; /* Remove previous vertical centering */
+  bottom: auto !important;
+  right: auto !important;
+}

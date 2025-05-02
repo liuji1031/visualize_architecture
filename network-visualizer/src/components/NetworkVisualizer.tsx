@@ -4,6 +4,7 @@ import ReactFlow, {
   ReactFlowProvider,
   Controls,
   Background,
+  MiniMap, // Import MiniMap
   Panel,
   useNodesState, // Reintroduced
   useEdgesState, // Reintroduced
@@ -21,6 +22,8 @@ import ReactFlow, {
   EdgeProps, // Add EdgeProps import
 } from 'reactflow';
 import 'reactflow/dist/style.css';
+import { Tooltip } from 'react-tooltip'; // Import Tooltip
+import 'react-tooltip/dist/react-tooltip.css'; // Import Tooltip CSS
 
 import { YamlConfig, ModuleNodeData, ModuleEdgeData } from '../types'; // Add ModuleEdgeData import
 import {
@@ -36,6 +39,7 @@ import {
   UploadResponse // Import UploadResponse type
 } from '../services/api';
 import { processNetworkStructure, NODE_WIDTH, HORIZONTAL_SPACING } from '../utils/networkProcessor';
+import { getNodeBackgroundColor } from '../utils/colorUtils'; // Import color util
 import CustomNode from './CustomNode';
 // import CustomEdge from './CustomEdge'; // No longer needed if using default types
 import ModifiedBezierEdge from './ModifiedBezierEdge'; // Import the new custom edge
@@ -381,6 +385,12 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
         >
           <Background />
           <Controls />
+          <MiniMap 
+            nodeColor={(node: Node<ModuleNodeData>) => getNodeBackgroundColor(node.data)} // Use utility function for node color
+            nodeStrokeWidth={3} // Optional: Add stroke width
+            pannable // Enable panning on the minimap
+            zoomable // Enable zooming on the minimap
+          />
           <Panel position="top-left">
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
               <input type="file" ref={fileInputRef} style={{ display: 'none' }} accept=".yaml,.yml" onChange={handleFileChange} />
@@ -425,6 +435,23 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
             </div>
           )}
         </ReactFlow>
+        {/* Add the global Tooltip component */}
+        <Tooltip 
+          id="node-tooltip" 
+          place="right" 
+          // effect="solid" // Removed deprecated prop
+          style={{ 
+            backgroundColor: 'rgba(0, 0, 0, 0.8)', 
+            color: 'white',
+            zIndex: 9999, // Ensure it's on top
+            maxWidth: '500px', // Match previous style
+            whiteSpace: 'pre-wrap', // Match previous style
+            wordBreak: 'break-word', // Match previous style
+            fontSize: '12px', // Match previous style
+            padding: '10px', // Match previous style
+            borderRadius: '5px', // Match previous style
+          }} 
+        />
       </div>
     </EdgeLabelContext.Provider>
   );
