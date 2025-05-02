@@ -3,9 +3,9 @@ import { YamlConfig, NetworkStructure, YamlModule } from '../types';
 
 // Constants for layout (Exported)
 export const NODE_WIDTH = 200;
-export const NODE_HEIGHT = 100; // Not currently used in NetworkVisualizer, but good to export if needed later
-export const HORIZONTAL_SPACING = 250;
-export const VERTICAL_SPACING = 150; // Not currently used in NetworkVisualizer
+export const NODE_HEIGHT = 100; // Height might be more relevant now
+export const HORIZONTAL_SPACING = 150; // Spacing between nodes in the same rank (horizontal)
+export const VERTICAL_SPACING = 200; // Spacing between ranks (vertical)
 
 /**
  * Process the YAML configuration into a network structure for ReactFlow
@@ -217,7 +217,8 @@ export const applyLayout = (network: NetworkStructure): NetworkStructure => {
   
   // Create a new graph
   const g = new dagre.graphlib.Graph();
-  g.setGraph({ rankdir: 'LR', nodesep: HORIZONTAL_SPACING, ranksep: VERTICAL_SPACING });
+  // Set layout direction to Top-to-Bottom ('TB') and adjust spacing
+  g.setGraph({ rankdir: 'TB', nodesep: HORIZONTAL_SPACING, ranksep: VERTICAL_SPACING });
   g.setDefaultEdgeLabel(() => ({}));
   
   // Add nodes to the graph

@@ -29,3 +29,5 @@ venv/
 .github
 .firebase
 .firebaserc
+
+*__pycache__*

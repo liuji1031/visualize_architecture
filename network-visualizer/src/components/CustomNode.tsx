@@ -3,17 +3,21 @@ import { Handle, Position, NodeProps } from 'reactflow';
 import { ModuleNodeData } from '../types';
 import yaml from 'js-yaml';
 
-// Styles for the custom node
+// Styles for the custom node (Simplified)
 const nodeStyles: React.CSSProperties = {
-  padding: '10px',
-  borderRadius: '5px',
-  width: '180px',
+  padding: '10px 15px', // Adjusted padding
+  borderRadius: '8px', // Slightly more rounded corners
+  // width: '180px', // Let width be more dynamic based on content? Or keep fixed? Let's try dynamic first.
+  minWidth: '150px', // Ensure a minimum width
   fontSize: '12px',
   color: '#222',
   textAlign: 'center',
   borderWidth: '1px',
   borderStyle: 'solid',
-  opacity: 1
+  // Removed opacity, assuming it's not needed
+  // Removed the double-box effect by ensuring no extra borders or shadows are implicitly added
+  // Background color will be set based on type/cls
+  position: 'relative', // Needed for absolute positioning of handles
 };
 
 // Function to generate a consistent hash from a string
@@ -58,11 +62,12 @@ const nodeTypeStyles = {
   }
 };
 
-// Handle styles
+// Handle styles (Adjusted for top/bottom)
 const handleStyle = {
   width: '10px',
   height: '10px',
-  borderRadius: '50%'
+  borderRadius: '50%',
+  background: '#555', // Make handles more visible
 };
 
 // Tooltip styles
@@ -147,14 +152,17 @@ const CustomNode: React.FC<CustomNodeProps> = ({ data, isConnectable, id, ...pro
   // Calculate the maximum number of handles
   const maxHandles = Math.max(inputCount, outputCount);
   
-  // Calculate the node height based on the maximum number of handles
-  const nodeHeight = 30 + maxHandles * 20;
-  
-  // Create the style with dynamic height
-  const style = { 
-    ...nodeStyles, 
+  // Calculate the node width based on the maximum number of handles
+  const nodeWidth = 100 + maxHandles * 25; // Adjust width based on handles
+
+  // Create the style with dynamic width
+  const style = {
+    ...nodeStyles,
     ...nodeStyle,
-    height: `${nodeHeight}px`
+    width: `${nodeWidth}px`,
+    // Height can be auto or fixed, let's try auto first
+    height: 'auto', // Let height adjust to content + padding
+    minHeight: '40px', // Ensure a minimum height
   };
   
   // Generate input handles
@@ -183,48 +191,36 @@ const CustomNode: React.FC<CustomNodeProps> = ({ data, isConnectable, id, ...pro
         totalHandles = outputNames.length;
       }
       
-      // Calculate handle positions for exit node
+      // Calculate handle positions for exit node (only horizontal needed now)
       
       return (
         <>
           {outputNames.map((outputName, index) => {
-            // Calculate position in pixels
-            let topPosition;
+            // Calculate horizontal position for handles
+            let leftPosition;
             if (totalHandles === 1) {
-              // If only one handle, center it
-              topPosition = nodeHeight / 2;
+              leftPosition = nodeWidth / 2; // Center if only one handle
             } else {
-              // For multiple handles
-              const topPadding = 20; // 20px from top
-              const bottomPadding = 20; // 20px from bottom
-              const availableHeight = nodeHeight - topPadding - bottomPadding;
-              
-              if (index === 0) {
-                // First handle
-                topPosition = topPadding;
-              } else if (index === totalHandles - 1) {
-                // Last handle
-                topPosition = nodeHeight - bottomPadding;
-              } else {
-                // Handles in between
-                const step = availableHeight / (totalHandles - 1);
-                topPosition = topPadding + (index * step);
-              }
+              const leftPadding = 20; // 20px from left
+              const rightPadding = 20; // 20px from right
+              const availableWidth = nodeWidth - leftPadding - rightPadding;
+              const step = availableWidth / (totalHandles - 1);
+              leftPosition = leftPadding + index * step;
             }
-            
+
             // Convert to percentage for CSS
-            const topPercentage = (topPosition / nodeHeight) * 100;
-            
+            const leftPercentage = (leftPosition / nodeWidth) * 100;
+
             return (
               <React.Fragment key={`input-fragment-${outputName}`}>
                 <Handle
                   key={`input-${outputName}`}
                   type="target"
-                  position={Position.Left}
+                  position={Position.Top} // Changed to Top
                   id={`input-${outputName}`}
                   style={{
                     ...handleStyle,
-                    top: `${topPercentage}%`
+                    left: `${leftPercentage}%`, // Use left for horizontal positioning
                   }}
                   isConnectable={isConnectable}
                 />
@@ -232,10 +228,12 @@ const CustomNode: React.FC<CustomNodeProps> = ({ data, isConnectable, id, ...pro
                   <div
                     style={{
                       position: 'absolute',
-                      left: '20px',
-                      top: `${topPercentage - 6}%`, // Slightly above the handle
+                      left: `${leftPercentage}%`, // Align with handle
+                      top: '-15px', // Position above the handle
+                      transform: 'translateX(-50%)', // Center the text
                       fontSize: '10px',
-                      textAlign: 'left'
+                      textAlign: 'center',
+                      whiteSpace: 'nowrap',
                     }}
                   >
                     {outputName}
@@ -247,48 +245,36 @@ const CustomNode: React.FC<CustomNodeProps> = ({ data, isConnectable, id, ...pro
         </>
       );
     }
-    
+
     // Regular nodes have numbered input handles based on their input sources
     const inputs = data.inputSources as string[] || [];
     const inputCount = inputs.length;
-    
+
     return Array.from({ length: inputCount }).map((_, index) => {
-      // Calculate position in pixels
-      let topPosition;
+      // Calculate horizontal position for handles
+      let leftPosition;
       if (inputCount === 1) {
-        // If only one handle, center it
-        topPosition = nodeHeight / 2;
+        leftPosition = nodeWidth / 2; // Center if only one handle
       } else {
-        // For multiple handles
-        const topPadding = 20; // 20px from top
-        const bottomPadding = 20; // 20px from bottom
-        const availableHeight = nodeHeight - topPadding - bottomPadding;
-        
-        if (index === 0) {
-          // First handle
-          topPosition = topPadding;
-        } else if (index === inputCount - 1) {
-          // Last handle
-          topPosition = nodeHeight - bottomPadding;
-        } else {
-          // Handles in between
-          const step = availableHeight / (inputCount - 1);
-          topPosition = topPadding + (index * step);
-        }
+        const leftPadding = 20; // 20px from left
+        const rightPadding = 20; // 20px from right
+        const availableWidth = nodeWidth - leftPadding - rightPadding;
+        const step = availableWidth / (inputCount - 1);
+        leftPosition = leftPadding + index * step;
       }
-      
+
       // Convert to percentage for CSS
-      const topPercentage = (topPosition / nodeHeight) * 100;
-      
+      const leftPercentage = (leftPosition / nodeWidth) * 100;
+
       return (
         <Handle
           key={`input-${index}`}
           type="target"
-          position={Position.Left}
+          position={Position.Top} // Changed to Top
           id={`input-${index}`}
           style={{
             ...handleStyle,
-            top: `${topPercentage}%`
+            left: `${leftPercentage}%`, // Use left for horizontal positioning
           }}
           isConnectable={isConnectable}
         />
@@ -309,89 +295,65 @@ const CustomNode: React.FC<CustomNodeProps> = ({ data, isConnectable, id, ...pro
       const outputCount = entrySources.length;
       
       return Array.from({ length: outputCount }).map((_, index) => {
-        // Calculate position in pixels
-        let topPosition;
+        // Calculate horizontal position for handles
+        let leftPosition;
         if (outputCount === 1) {
-          // If only one handle, center it
-          topPosition = nodeHeight / 2;
+          leftPosition = nodeWidth / 2; // Center if only one handle
         } else {
-          // For multiple handles
-          const topPadding = 20; // 20px from top
-          const bottomPadding = 20; // 20px from bottom
-          const availableHeight = nodeHeight - topPadding - bottomPadding;
-          
-          if (index === 0) {
-            // First handle
-            topPosition = topPadding;
-          } else if (index === outputCount - 1) {
-            // Last handle
-            topPosition = nodeHeight - bottomPadding;
-          } else {
-            // Handles in between
-            const step = availableHeight / (outputCount - 1);
-            topPosition = topPadding + (index * step);
-          }
+          const leftPadding = 20; // 20px from left
+          const rightPadding = 20; // 20px from right
+          const availableWidth = nodeWidth - leftPadding - rightPadding;
+          const step = availableWidth / (outputCount - 1);
+          leftPosition = leftPadding + index * step;
         }
-        
+
         // Convert to percentage for CSS
-        const topPercentage = (topPosition / nodeHeight) * 100;
-        
+        const leftPercentage = (leftPosition / nodeWidth) * 100;
+
         return (
           <Handle
             key={`output-${index}`}
             type="source"
-            position={Position.Right}
+            position={Position.Bottom} // Changed to Bottom
             id={`output-${index}`}
             style={{
               ...handleStyle,
-              top: `${topPercentage}%`
+              left: `${leftPercentage}%`, // Use left for horizontal positioning
             }}
             isConnectable={isConnectable}
           />
         );
       });
     }
-    
+
     // Number of outputs for regular nodes
     const outputCount = outNum || 1;
-    
+
     return Array.from({ length: outputCount }).map((_, index) => {
-      // Calculate position in pixels
-      let topPosition;
+      // Calculate horizontal position for handles
+      let leftPosition;
       if (outputCount === 1) {
-        // If only one handle, center it
-        topPosition = nodeHeight / 2;
+        leftPosition = nodeWidth / 2; // Center if only one handle
       } else {
-        // For multiple handles
-        const topPadding = 20; // 20px from top
-        const bottomPadding = 20; // 20px from bottom
-        const availableHeight = nodeHeight - topPadding - bottomPadding;
-        
-        if (index === 0) {
-          // First handle
-          topPosition = topPadding;
-        } else if (index === outputCount - 1) {
-          // Last handle
-          topPosition = nodeHeight - bottomPadding;
-        } else {
-          // Handles in between
-          const step = availableHeight / (outputCount - 1);
-          topPosition = topPadding + (index * step);
-        }
+        const leftPadding = 20; // 20px from left
+        const rightPadding = 20; // 20px from right
+        const availableWidth = nodeWidth - leftPadding - rightPadding;
+        const step = availableWidth / (outputCount - 1);
+        leftPosition = leftPadding + index * step;
       }
-      
+
       // Convert to percentage for CSS
-      const topPercentage = (topPosition / nodeHeight) * 100;
-      
+      const leftPercentage = (leftPosition / nodeWidth) * 100;
+
       return (
         <Handle
           key={`output-${index}`}
           type="source"
-          position={Position.Right}
+          position={Position.Bottom} // Changed to Bottom
           id={`output-${index}`}
           style={{
             ...handleStyle,
-            top: `${topPercentage}%`
+            left: `${leftPercentage}%`, // Use left for horizontal positioning
           }}
           isConnectable={isConnectable}
         />
@@ -453,14 +415,14 @@ const CustomNode: React.FC<CustomNodeProps> = ({ data, isConnectable, id, ...pro
       onDoubleClick={handleDoubleClick} // Add double click handler
       data-testid={`node-${id}`}
     >
-      <div style={{ 
-        display: 'flex', 
+      {/* Simplified inner div */}
+      <div style={{
+        display: 'flex',
         flexDirection: 'column',
         justifyContent: 'center',
         alignItems: 'center',
-        height: '100%',
-        position: 'relative',
-        zIndex: 1
+        height: '100%', // Take full height of the parent div
+        // No extra positioning needed here now
       }}>
         <div style={{ fontWeight: 'bold' }}>{label}</div>
         {cls && <div style={{ fontSize: '10px' }}>{cls}</div>}
