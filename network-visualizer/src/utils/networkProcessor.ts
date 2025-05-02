@@ -4,8 +4,8 @@ import { YamlConfig, NetworkStructure, YamlModule } from '../types';
 // Constants for layout (Exported)
 export const NODE_WIDTH = 200;
 export const NODE_HEIGHT = 100; // Height might be more relevant now
-export const HORIZONTAL_SPACING = 150; // Spacing between nodes in the same rank (horizontal)
-export const VERTICAL_SPACING = 200; // Spacing between ranks (vertical)
+export const HORIZONTAL_SPACING = 30; // Spacing between nodes in the same rank (horizontal)
+export const VERTICAL_SPACING = 0; // Spacing between ranks (vertical)
 
 /**
  * Process the YAML configuration into a network structure for ReactFlow
