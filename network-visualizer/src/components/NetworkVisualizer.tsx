@@ -37,7 +37,8 @@ import {
 } from '../services/api';
 import { processNetworkStructure, NODE_WIDTH, HORIZONTAL_SPACING } from '../utils/networkProcessor';
 import CustomNode from './CustomNode';
-import CustomEdge from './CustomEdge';
+// import CustomEdge from './CustomEdge'; // No longer needed if using default types
+import ModifiedBezierEdge from './ModifiedBezierEdge'; // Import the new custom edge
 
 // Create a context for edge label visibility
 export const EdgeLabelContext = createContext<boolean>(true);
@@ -59,7 +60,7 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [showEdgeLabels, setShowEdgeLabels] = useState<boolean>(false); // Default to false
   const [currentUploadId, setCurrentUploadId] = useState<string | null>(null); // State for upload ID
-
+  
   type GraphState = { nodes: Node[]; edges: Edge[]; config?: YamlConfig };
   const [historyStack, setHistoryStack] = useState<GraphState[]>([]);
   const [currentGraphIndex, setCurrentGraphIndex] = useState<number>(-1);
@@ -69,9 +70,10 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
   const folderInputRef = useRef<HTMLInputElement>(null);
   const reactFlowInstance = useReactFlow();
 
-  // Simple edgeTypes mapping
+  // Register the new custom edge type
   const edgeTypes: EdgeTypes = {
-    custom: CustomEdge,
+    modifiedBezier: ModifiedBezierEdge,
+    // Keep smoothstep as a built-in type
   };
 
   // Handle toggle for edge labels
@@ -96,15 +98,23 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
     };
   }, [reactFlowInstance]);
 
+  const arrowWidth = 20;
+  const arrowHeight = 20;
+
+  // Simplified createGraphElements to always use modifiedBezier
   const createGraphElements = (config: YamlConfig): { nodes: Node[], edges: Edge[] } => {
     const { nodes: processedNodes, edges: processedEdges } = processNetworkStructure(config);
     const customNodes = processedNodes.map((node) => ({ ...node, type: 'custom', hidden: false }));
     const customEdges = processedEdges.map((edge) => ({
-      ...edge, type: 'custom', hidden: false, markerEnd: { type: MarkerType.ArrowClosed, width: 15, height: 15, color: '#555' },
+      ...edge,
+      type: 'modifiedBezier', // Always use modifiedBezier
+      hidden: false,
+      markerEnd: { type: MarkerType.ArrowClosed, width: arrowWidth, height: arrowHeight, color: '#555' },
     }));
     return { nodes: customNodes, edges: customEdges };
   };
 
+  // Simplified processConfig to not require edgeType parameter
   const processConfig = useCallback((
     config: YamlConfig,
     isInitialLoad: boolean = true,
@@ -112,6 +122,7 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
   ) => {
     try {
       setError(null);
+      // No need to pass edgeType anymore
       let { nodes: newNodes, edges: newEdges } = createGraphElements(config);
       if (!isInitialLoad && parentNodePosition) {
         const offsetX = parentNodePosition.x + NODE_WIDTH + HORIZONTAL_SPACING / 2;
@@ -155,7 +166,7 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
     }
   }, [yamlUrl, processConfig]);
 
-  // Updated uploadAndProcessFile to handle UploadResponse
+  // Updated uploadAndProcessFile to handle UploadResponse and pass edgeType correctly
   const uploadAndProcessFile = useCallback((file: File, isInitial: boolean = true) => {
     setFile(file);
     uploadYamlFile(file)
@@ -310,7 +321,12 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
 
   const onConnect = useCallback(
     (connection: Connection) => {
-      setEdges((eds) => addEdge({ ...connection, type: 'custom', markerEnd: { type: MarkerType.ArrowClosed, width: 15, height: 15, color: '#555' } }, eds));
+      setEdges((eds) => addEdge({ 
+        ...connection, 
+        type: 'modifiedBezier', // Always use modifiedBezier
+        markerEnd: { type: MarkerType.ArrowClosed, width: arrowWidth
+          , height: arrowHeight, color: '#555' } 
+      }, eds));
     }, [setEdges]
   );
 
@@ -358,7 +374,8 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
           nodeTypes={nodeTypes}
-          edgeTypes={edgeTypes} // Use the simple mapping
+          edgeTypes={edgeTypes} // Register custom edge types
+          defaultEdgeOptions={{ type: 'modifiedBezier' }} // Always use modifiedBezier
           nodesDraggable
           elementsSelectable
         >
@@ -380,6 +397,7 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
                 <input type="checkbox" id="edge-labels-toggle" checked={showEdgeLabels} onChange={toggleEdgeLabels} style={{ marginRight: '8px' }} />
                 <label htmlFor="edge-labels-toggle" style={{ fontSize: '14px', cursor: 'pointer' }}>Show Edge Labels</label>
               </div>
+              {/* Edge type toggle button removed */}
             </div>
           </Panel>
           {error && (

@@ -81,9 +81,12 @@ const tooltipStyles: React.CSSProperties = {
   padding: '10px',
   borderRadius: '5px',
   fontSize: '12px',
-  zIndex: 1000,
-  minWidth: '200px',
-  maxWidth: '300px',
+  zIndex: 9999, // High z-index to ensure it's above everything
+  minWidth: '250px',
+  maxWidth: '500px',
+  width: 'auto',
+  maxHeight: '80vh',
+  overflow: 'auto',
   textAlign: 'left',
   boxShadow: '0 2px 10px rgba(0, 0, 0, 0.2)',
   pointerEvents: 'none',
@@ -105,20 +108,21 @@ const CustomNode: React.FC<CustomNodeProps> = ({ data, isConnectable, id, ...pro
   
   // Generate style based on cls for non-entry/exit nodes
   let nodeStyle = nodeTypeStyles[nodeType];
-  if (!isEntry && !isExit && cls) {
+  if (!isEntry && !isExit && (cls || label)) { // Check for label as well for ComposableModel
     if (cls === 'ComposableModel') {
-      // Use specific color for ComposableModel nodes
+      // For ComposableModel, hash color based on the module name (label)
       nodeStyle = {
         ...nodeTypeStyles.default,
-        backgroundColor: '#b8a6ed'
+        backgroundColor: generateColorFromCls(label) // Use label for color hashing
       };
-    } else {
-      // For other nodes, use the color generated from cls
+    } else if (cls) {
+      // For other nodes with a cls, use the color generated from cls
       nodeStyle = {
         ...nodeTypeStyles.default,
         backgroundColor: generateColorFromCls(cls)
       };
     }
+    // If neither cls nor label is present (unlikely for non-entry/exit), it keeps the default style
   }
   
   // Calculate the number of input and output handles
@@ -429,7 +433,12 @@ const CustomNode: React.FC<CustomNodeProps> = ({ data, isConnectable, id, ...pro
         
         {/* Config tooltip */}
         {showTooltip && config && (
-          <div style={tooltipStyles}>
+          <div style={{
+            ...tooltipStyles,
+            // Dynamic positioning to prevent tooltip from going off-screen
+            left: '100%', // Default position to the right of the node
+            right: 'auto', // Reset right position
+          }}>
             <div style={{ fontWeight: 'bold', marginBottom: '5px' }}>Configuration:</div>
             <pre style={{ margin: 0 }}>{formatConfig(config)}</pre>
           </div>
