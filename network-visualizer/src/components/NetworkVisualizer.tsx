@@ -20,7 +20,7 @@ import ReactFlow, {
   NodeChange, // Needed for onNodesChange (provided by hook)
   EdgeChange, // Needed for onEdgesChange (provided by hook)
   EdgeProps, // Add EdgeProps import
-  getRectOfNodes, // Import helper function
+  getNodesBounds, // Import helper function (updated from getRectOfNodes)
   Viewport, // Import Viewport type
   PanelPosition, // Import PanelPosition for type safety
 } from 'reactflow';
@@ -40,7 +40,8 @@ import {
   uploadYamlFolder,
   UploadFolderOptions,
   cleanupUpload, // Renamed import
-  UploadResponse // Import UploadResponse type
+  UploadResponse, // Import UploadResponse type
+  cropImage // Import cropImage function
 } from '../services/api';
 import { processNetworkStructure, NODE_WIDTH, HORIZONTAL_SPACING } from '../utils/networkProcessor';
 import { getNodeBackgroundColor } from '../utils/colorUtils'; // Import color util
@@ -173,7 +174,7 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
             const topPadding = 50;
             const bottomPadding = 50;
 
-            const bounds = getRectOfNodes(newNodes);
+            const bounds = getNodesBounds(newNodes);
             const flowDimensions = reactFlowWrapper.current.getBoundingClientRect();
             const viewportWidth = flowDimensions.width;
             const viewportHeight = flowDimensions.height;
@@ -514,15 +515,24 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
               }
             })
             .then((dataUrl: string) => {
-              console.log(`${format.toUpperCase()} captured successfully`);
+              console.log(`${format.toUpperCase()} captured successfully, sending to backend for cropping...`);
+              
+              // Send to backend for cropping
+              return cropImage(dataUrl, format, 30); // 30px padding
+            })
+            .then((croppedDataUrl: string) => {
+              console.log(`Cropped ${format.toUpperCase()} received from backend`);
               
               // Create download link
               const downloadLink = document.createElement('a');
-              downloadLink.href = dataUrl;
+              downloadLink.href = croppedDataUrl;
               downloadLink.download = filename;
               document.body.appendChild(downloadLink);
               downloadLink.click();
               document.body.removeChild(downloadLink);
+              
+              // Clean up the object URL
+              URL.revokeObjectURL(croppedDataUrl);
             })
             .catch((error: Error) => {
               console.error(`Error exporting ${format.toUpperCase()}:`, error);

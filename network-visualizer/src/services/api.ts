@@ -277,3 +277,38 @@ export const getSubgraphConfig = async (uploadId: string | null, relativePath: s
     throw error instanceof Error ? error : new Error(String(error));
   }
 };
+
+/**
+ * Crop an image using the backend API
+ * @param imageData - Base64-encoded image data or data URL
+ * @param format - 'svg', 'png', or 'auto' to determine from the data
+ * @param padding - Padding in pixels to add around the content
+ * @returns Promise resolving to a blob URL for the cropped image
+ */
+export const cropImage = async (
+  imageData: string,
+  format: 'svg' | 'png' | 'auto' = 'auto',
+  padding: number = 30
+): Promise<string> => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/yaml/crop-image`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ image_data: imageData, format, padding }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error || 'Failed to crop image');
+    }
+
+    // Convert the response to a blob URL
+    const blob = await response.blob();
+    return URL.createObjectURL(blob);
+  } catch (error) {
+    console.error('Error cropping image:', error);
+    throw error;
+  }
+};

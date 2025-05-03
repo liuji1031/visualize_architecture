@@ -5,3 +5,6 @@ omegaconf==2.1.1
 flask-cors==3.0.10
 requests==2.28.1
 google-cloud-storage>=1.44.0,<3.0.0 # Added for GCS integration
+Pillow==9.5.0  # For PNG processing
+lxml==4.9.2    # For SVG processing
+numpy==1.24.3  # For image array manipulation

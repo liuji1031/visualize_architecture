@@ -9,6 +9,7 @@ import io
 import glob # May still be useful for local temp processing
 import yaml
 import uuid # For generating unique upload IDs
+import base64 # For image data processing
 from google.cloud import storage # Import GCS client
 
 from ..services.yaml_service import (
@@ -18,6 +19,8 @@ from ..services.yaml_service import (
     find_all_config_references, # This might need GCS adaptation
     find_config_references # This might need GCS adaptation
 )
+
+from ..services.image_service import crop_image
 
 # --- GCS Configuration ---
 # Get bucket name from environment variable
@@ -484,4 +487,54 @@ def fetch():
     except Exception as e:
         error_message = f"Error fetching YAML file: {str(e)}"
         print(error_message)
+        return jsonify({'error': error_message}), 500
+
+@yaml_bp.route('/crop-image', methods=['POST', 'OPTIONS'])
+def crop_image_endpoint():
+    """
+    Crop an image to remove excess whitespace.
+    
+    Request body:
+        image_data: Base64-encoded image data or data URL
+        format: 'svg' or 'png' or 'auto' (default)
+        padding: Optional padding in pixels (default: 20)
+        
+    Returns:
+        The cropped image file for download
+    """
+    # Handle preflight OPTIONS request
+    if request.method == 'OPTIONS':
+        response = make_response()
+        response.headers.add('Access-Control-Allow-Origin', 'https://network-visualizer-36300.web.app')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
+        response.headers.add('Access-Control-Allow-Methods', 'POST')
+        return response
+        
+    data = request.json
+    if not data or 'image_data' not in data:
+        return jsonify({'error': 'No image data provided'}), 400
+        
+    image_data = data['image_data']
+    image_format = data.get('format', 'auto').lower()
+    padding = data.get('padding', 20)
+    
+    if image_format not in ['svg', 'png', 'auto']:
+        return jsonify({'error': 'Invalid format. Must be "svg", "png", or "auto"'}), 400
+    
+    try:
+        print(f"Processing image crop request with format: {image_format}, padding: {padding}")
+        
+        # Crop the image using the service function
+        cropped_data, content_type = crop_image(image_data, image_format, padding)
+        
+        # Return the cropped image with appropriate headers
+        response = make_response(cropped_data)
+        response.headers.set('Content-Type', content_type)
+        response.headers.set('Access-Control-Allow-Origin', 'https://network-visualizer-36300.web.app')
+        return response
+        
+    except Exception as e:
+        error_message = f"Error cropping image: {str(e)}"
+        tb_str = traceback.format_exc()
+        print(f"{error_message}\nTraceback:\n{tb_str}")
         return jsonify({'error': error_message}), 500
