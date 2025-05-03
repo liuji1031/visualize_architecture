@@ -20,7 +20,11 @@ import ReactFlow, {
   NodeChange, // Needed for onNodesChange (provided by hook)
   EdgeChange, // Needed for onEdgesChange (provided by hook)
   EdgeProps, // Add EdgeProps import
+  getRectOfNodes, // Import helper function
+  Viewport, // Import Viewport type
+  PanelPosition, // Import PanelPosition for type safety
 } from 'reactflow';
+import { toPng, toSvg } from 'html-to-image'; // Import SVG export function as well
 import 'reactflow/dist/style.css';
 import { Tooltip } from 'react-tooltip'; // Import Tooltip
 import 'react-tooltip/dist/react-tooltip.css'; // Import Tooltip CSS
@@ -52,6 +56,10 @@ interface NetworkVisualizerProps {
   yamlUrl?: string;
 }
 
+// Define zoom constraints as constants
+const MIN_ZOOM_LEVEL = 0.25;
+const MAX_ZOOM_LEVEL = 1.0;
+
 const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yamlUrl }) => {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
@@ -64,14 +72,18 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [showEdgeLabels, setShowEdgeLabels] = useState<boolean>(false); // Default to false
   const [currentUploadId, setCurrentUploadId] = useState<string | null>(null); // State for upload ID
+  const [showUI, setShowUI] = useState<boolean>(true); // Control UI visibility during export
+  const [showBackground, setShowBackground] = useState<boolean>(true); // Control background visibility during export
   
-  type GraphState = { nodes: Node[]; edges: Edge[]; config?: YamlConfig };
+  // Add triggerNodeId to track which node was clicked to navigate
+  type GraphState = { nodes: Node[]; edges: Edge[]; config?: YamlConfig; triggerNodeId?: string }; 
   const [historyStack, setHistoryStack] = useState<GraphState[]>([]);
   const [currentGraphIndex, setCurrentGraphIndex] = useState<number>(-1);
   const [subgraphCache, setSubgraphCache] = useState<Record<string, GraphState>>({});
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
+  const reactFlowWrapper = useRef<HTMLDivElement>(null); // Ref for the container div
   const reactFlowInstance = useReactFlow();
 
   // Register the new custom edge type
@@ -113,16 +125,25 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
       ...edge,
       type: 'modifiedBezier', // Always use modifiedBezier
       hidden: false,
-      markerEnd: { type: MarkerType.ArrowClosed, width: arrowWidth, height: arrowHeight, color: '#555' },
+      style: { strokeWidth: 1.5, stroke: '#555', fill: 'none' }, // Explicit edge style
+      markerEnd: { 
+        type: MarkerType.ArrowClosed, 
+        width: arrowWidth, 
+        height: arrowHeight, 
+        color: '#555',
+        strokeWidth: 1 // Ensure marker has stroke width
+      },
     }));
     return { nodes: customNodes, edges: customEdges };
   };
 
   // Simplified processConfig to not require edgeType parameter
+  // Add triggerNodeId parameter
   const processConfig = useCallback((
     config: YamlConfig,
     isInitialLoad: boolean = true,
-    parentNodePosition?: XYPosition
+    parentNodePosition?: XYPosition,
+    triggerNodeId?: string 
   ) => {
     try {
       setError(null);
@@ -137,14 +158,64 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
         newNodes = newNodes.map(node => ({ ...node, hidden: false }));
         newEdges = newEdges.map(edge => ({ ...edge, hidden: false }));
       }
-      const newGraphState: GraphState = { nodes: newNodes, edges: newEdges, config };
+      // Assign triggerNodeId to the state if provided
+      const newGraphState: GraphState = { nodes: newNodes, edges: newEdges, config, triggerNodeId }; 
       if (isInitialLoad) {
         setHistoryStack([newGraphState]);
         setCurrentGraphIndex(0);
         setSubgraphCache({});
         setNodes(newNodes);
         setEdges(newEdges);
-        setTimeout(() => { if (reactFlowInstance) reactFlowInstance.fitView({ padding: 0.2, duration: 800 }); }, 300);
+        // Implement single-step initial view logic
+        setTimeout(() => {
+          if (reactFlowInstance && reactFlowWrapper.current && newNodes.length > 0) {
+            const padding = 0.2; // Same padding as fitView uses
+            const topPadding = 50;
+            const bottomPadding = 50;
+
+            const bounds = getRectOfNodes(newNodes);
+            const flowDimensions = reactFlowWrapper.current.getBoundingClientRect();
+            const viewportWidth = flowDimensions.width;
+            const viewportHeight = flowDimensions.height;
+
+            // Calculate zoom level needed to fit bounds within viewport + padding
+            const zoomX = viewportWidth / (bounds.width * (1 + padding * 2));
+            const zoomY = viewportHeight / (bounds.height * (1 + padding * 2));
+            let targetZoom = Math.min(zoomX, zoomY);
+
+            // Apply zoom constraints
+            targetZoom = Math.max(targetZoom, 0.8);
+            targetZoom = Math.min(targetZoom, MAX_ZOOM_LEVEL);
+
+            // Find the actual topmost node
+            const topmostNode = newNodes.reduce((top, node) => (node.position.y < top.position.y ? node : top), newNodes[0]);
+
+            // Calculate target X for horizontal centering at targetZoom
+            const targetX = (viewportWidth - bounds.width * targetZoom) / 2 - bounds.x * targetZoom;
+
+            // Calculate target Y to align top node below topPadding at targetZoom
+            const targetY_topAligned = topPadding - (topmostNode.position.y * targetZoom);
+
+            // Calculate where the bottom of the graph would be if top-aligned at targetZoom
+            const graphBottomScreenY = targetY_topAligned + (bounds.height * targetZoom);
+
+            let finalTargetY = targetY_topAligned; // Default to top-aligned
+
+            // Check if the entire graph fits vertically at the target zoom
+            if (graphBottomScreenY < viewportHeight - bottomPadding) {
+              // It fits, so calculate Y to center it vertically
+              const verticalCenterOffset = (viewportHeight - bounds.height * targetZoom) / 2;
+              finalTargetY = verticalCenterOffset - (bounds.y * targetZoom);
+            }
+            // Else: It doesn't fit, keep finalTargetY as targetY_topAligned
+
+            // Apply the final calculated viewport with a single call
+            reactFlowInstance.setViewport(
+              { x: targetX, y: finalTargetY, zoom: targetZoom },
+              { duration: 800 } // Use the longer duration for the single animation
+            );
+          }
+        }, 300); // Delay slightly to ensure nodes are rendered
       }
       return newGraphState;
     } catch (err: any) {
@@ -212,7 +283,8 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
     try {
       const subgraphConfig = await getSubgraphConfig(currentUploadId, configPath, nodeModuleName); // Pass currentUploadId
       // Simplified logic - always process subgraph, don't rely on cache across uploads
-      const newlyGeneratedState = processConfig(subgraphConfig, false, parentNode.position);
+      // Pass the parentNodeId as the triggerNodeId for the new state
+      const newlyGeneratedState = processConfig(subgraphConfig, false, parentNode.position, nodeId); 
       if (newlyGeneratedState) {
         const newStack = [...historyStack.slice(0, currentGraphIndex + 1), newlyGeneratedState];
         setHistoryStack(newStack);
@@ -328,28 +400,45 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
       setEdges((eds) => addEdge({ 
         ...connection, 
         type: 'modifiedBezier', // Always use modifiedBezier
-        markerEnd: { type: MarkerType.ArrowClosed, width: arrowWidth
-          , height: arrowHeight, color: '#555' } 
+        style: { strokeWidth: 1.5, stroke: '#555', fill: 'none' }, // Explicit edge style
+        markerEnd: { 
+          type: MarkerType.ArrowClosed, 
+          width: arrowWidth, 
+          height: arrowHeight, 
+          color: '#555',
+          strokeWidth: 1 // Ensure marker has stroke width
+        } 
       }, eds));
     }, [setEdges]
   );
 
   const handleGoBack = useCallback(() => {
     if (currentGraphIndex > 0) {
+      const currentState = historyStack[currentGraphIndex]; // Get the state we are navigating *from*
+      const triggerNodeId = currentState.triggerNodeId; // Get the ID of the node clicked in the previous state
+
       const previousIndex = currentGraphIndex - 1;
       const previousGraphState = historyStack[previousIndex];
+      
       setNodes(previousGraphState.nodes);
       setEdges(previousGraphState.edges);
       setCurrentGraphIndex(previousIndex);
+
+      // Center on the trigger node if it exists
       setTimeout(() => {
         if (reactFlowInstance) {
-          const nodeCount = previousGraphState.nodes.length;
-          const padding = calculateDynamicPadding(nodeCount);
-          const duration = calculateTransitionDuration(nodeCount);
-          reactFlowInstance.fitView({ padding: padding, duration: duration });
-          setTimeout(() => { reactFlowInstance.fitView({ padding: padding, duration: duration / 2 }); }, 500);
+          if (triggerNodeId && previousGraphState.nodes.some(n => n.id === triggerNodeId)) {
+            // Fit view to the specific node that was originally clicked
+            reactFlowInstance.fitView({ nodes: [{ id: triggerNodeId }], padding: 0.3, duration: 800 });
+          } else {
+            // Fallback to fitting the whole view if triggerNodeId is missing or invalid
+            const nodeCount = previousGraphState.nodes.length;
+            const padding = calculateDynamicPadding(nodeCount);
+            const duration = calculateTransitionDuration(nodeCount);
+            reactFlowInstance.fitView({ padding: padding, duration: duration });
+          }
         }
-      }, 300);
+      }, 300); // Delay slightly to allow state update
     }
   }, [currentGraphIndex, historyStack, setNodes, setEdges, setCurrentGraphIndex, reactFlowInstance]);
 
@@ -364,13 +453,112 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
     }, 300);
   }, [reactFlowInstance, nodes]);
 
+  // Refactor the export functionality into a reusable function
+  const exportImage = useCallback((format: 'png' | 'svg') => {
+    if (reactFlowWrapper.current && reactFlowInstance && nodes.length > 0) {
+      // Store current viewport
+      const currentViewport = reactFlowInstance.getViewport();
+      
+      // Hide UI elements
+      setShowUI(false);
+      setShowBackground(false);
+      
+      // Wait for UI update to complete
+      setTimeout(() => {
+        try {
+          console.log(`Starting ${format} export process...`);
+          
+          // Fit all nodes to ensure everything is visible
+          reactFlowInstance.fitView({ padding: 0.3 });
+          
+          // Wait for the fitView animation to complete
+          setTimeout(() => {
+            // Get the current configuration for filename
+            const currentState = historyStack[currentGraphIndex];
+            const currentConfig = currentState?.config;
+            
+            // Generate filename
+            let filename = 'network-diagram';
+            if (currentConfig && 'name' in currentConfig) {
+              filename = currentConfig.name as string;
+            } else {
+              const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+              filename = `network-diagram-${timestamp}`;
+            }
+            
+            // Add the appropriate extension
+            if (format === 'svg') {
+              if (!filename.endsWith('.svg')) {
+                filename = filename.replace(/\.png$/, '') + '.svg';
+              }
+            } else {
+              if (!filename.endsWith('.png')) {
+                filename = filename.replace(/\.svg$/, '') + '.png';
+              }
+            }
+            
+            console.log(`Using filename: ${filename}`);
+            
+            // Choose the appropriate export function based on format
+            const exportFunction = format === 'svg' ? toSvg : toPng;
+            
+            // Capture the entire ReactFlow container
+            exportFunction(reactFlowWrapper.current!, { 
+              backgroundColor: '#ffffff',
+              pixelRatio: 3, // High resolution
+              filter: (node) => {
+                // Filter out UI elements from the capture
+                return !node.classList?.contains('react-flow__controls') && 
+                       !node.classList?.contains('react-flow__minimap') &&
+                       !node.classList?.contains('react-flow__panel');
+              }
+            })
+            .then((dataUrl: string) => {
+              console.log(`${format.toUpperCase()} captured successfully`);
+              
+              // Create download link
+              const downloadLink = document.createElement('a');
+              downloadLink.href = dataUrl;
+              downloadLink.download = filename;
+              document.body.appendChild(downloadLink);
+              downloadLink.click();
+              document.body.removeChild(downloadLink);
+            })
+            .catch((error: Error) => {
+              console.error(`Error exporting ${format.toUpperCase()}:`, error);
+              setError(`Failed to export ${format.toUpperCase()}. Please try again.`);
+            })
+            .finally(() => {
+              console.log("Restoring UI and viewport");
+              // Restore UI elements and viewport
+              setShowUI(true);
+              setShowBackground(true);
+              reactFlowInstance.setViewport(currentViewport);
+            });
+          }, 500); // Wait for fitView animation
+        } catch (error) {
+          console.error('Error during export:', error);
+          setShowUI(true);
+          setShowBackground(true);
+          reactFlowInstance.setViewport(currentViewport);
+        }
+      }, 100); // Wait for UI update
+    } else {
+      setError('No nodes to export. Please load a graph first.');
+    }
+  }, [historyStack, currentGraphIndex, reactFlowInstance, nodes, setError]);
+
+  // Create specific handlers for PNG and SVG export
+  const handleExportPNG = useCallback(() => exportImage('png'), [exportImage]);
+  const handleExportSVG = useCallback(() => exportImage('svg'), [exportImage]);
+
   const nodeTypes: NodeTypes = React.useMemo(() => ({
     custom: (props) => <CustomNode {...props} onNodeDoubleClick={handleNodeDoubleClick} />,
   }), [handleNodeDoubleClick]);
 
   return (
     <EdgeLabelContext.Provider value={showEdgeLabels}>
-      <div style={{ width: '100%', height: '100%' }}>
+      <div style={{ width: '100%', height: '100%' }} ref={reactFlowWrapper}> {/* Add ref here */}
         <ReactFlow
           nodes={nodes}
           edges={edges}
@@ -382,38 +570,48 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
           defaultEdgeOptions={{ type: 'modifiedBezier' }} // Always use modifiedBezier
           nodesDraggable
           elementsSelectable
+          minZoom={MIN_ZOOM_LEVEL} // Add global minimum zoom constraint
+          maxZoom={MAX_ZOOM_LEVEL} // Add global maximum zoom constraint
         >
-          <Background />
-          <Controls />
-          <MiniMap 
-            nodeColor={(node: Node<ModuleNodeData>) => getNodeBackgroundColor(node.data)} // Use utility function for node color
-            nodeStrokeWidth={3} // Optional: Add stroke width
-            pannable // Enable panning on the minimap
-            zoomable // Enable zooming on the minimap
-          />
-          <Panel position="top-left">
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              <input type="file" ref={fileInputRef} style={{ display: 'none' }} accept=".yaml,.yml" onChange={handleFileChange} />
-              {/* @ts-ignore - webkitdirectory and directory are non-standard attributes */}
-              <input type="file" ref={folderInputRef} style={{ display: 'none' }} webkitdirectory="" directory="" multiple onChange={handleFolderChange} />
-              <button onClick={handleUploadClick} style={{ padding: '8px 12px', backgroundColor: '#4a90e2', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>Upload YAML File</button>
-              <button onClick={handleUploadFolderClick} style={{ padding: '8px 12px', backgroundColor: '#28a745', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>Upload Folder</button>
-              <button onClick={resetView} style={{ padding: '8px 12px', backgroundColor: '#6c757d', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>Reset View</button>
-              {currentGraphIndex > 0 && (
-                <button onClick={handleGoBack} style={{ marginTop: '10px', padding: '8px 12px', backgroundColor: '#ffc107', color: 'black', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>Go Back</button>
-              )}
-              {/* Add checkbox for edge labels */}
-              <div style={{ display: 'flex', alignItems: 'center', backgroundColor: '#f0f0f0', padding: '8px 12px', borderRadius: '4px', border: '1px solid #ccc' }}>
-                <input type="checkbox" id="edge-labels-toggle" checked={showEdgeLabels} onChange={toggleEdgeLabels} style={{ marginRight: '8px' }} />
-                <label htmlFor="edge-labels-toggle" style={{ fontSize: '14px', cursor: 'pointer' }}>Show Edge Labels</label>
+          {showBackground && <Background />}
+          {showUI && (
+            <>
+              <Controls />
+              <MiniMap 
+                nodeColor={(node: Node<ModuleNodeData>) => getNodeBackgroundColor(node.data)} // Use utility function for node color
+                nodeStrokeWidth={3} // Optional: Add stroke width
+                pannable // Enable panning on the minimap
+                zoomable // Enable zooming on the minimap
+              />
+            </>
+          )}
+          {showUI && (
+            <Panel position="top-left">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <input type="file" ref={fileInputRef} style={{ display: 'none' }} accept=".yaml,.yml" onChange={handleFileChange} />
+                {/* @ts-ignore - webkitdirectory and directory are non-standard attributes */}
+                <input type="file" ref={folderInputRef} style={{ display: 'none' }} webkitdirectory="" directory="" multiple onChange={handleFolderChange} />
+                <button onClick={handleUploadClick} style={{ padding: '8px 12px', backgroundColor: '#4a90e2', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>Upload YAML File</button>
+                <button onClick={handleUploadFolderClick} style={{ padding: '8px 12px', backgroundColor: '#28a745', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>Upload Folder</button>
+                <button onClick={resetView} style={{ padding: '8px 12px', backgroundColor: '#6c757d', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>Reset View</button>
+                <button onClick={handleExportPNG} style={{ padding: '8px 12px', backgroundColor: '#9c27b0', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>Download PNG</button>
+                <button onClick={handleExportSVG} style={{ padding: '8px 12px', backgroundColor: '#673ab7', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>Download SVG</button>
+                {currentGraphIndex > 0 && (
+                  <button onClick={handleGoBack} style={{ marginTop: '10px', padding: '8px 12px', backgroundColor: '#ffc107', color: 'black', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>Go Back</button>
+                )}
+                {/* Add checkbox for edge labels */}
+                <div style={{ display: 'flex', alignItems: 'center', backgroundColor: '#f0f0f0', padding: '8px 12px', borderRadius: '4px', border: '1px solid #ccc' }}>
+                  <input type="checkbox" id="edge-labels-toggle" checked={showEdgeLabels} onChange={toggleEdgeLabels} style={{ marginRight: '8px' }} />
+                  <label htmlFor="edge-labels-toggle" style={{ fontSize: '14px', cursor: 'pointer' }}>Show Edge Labels</label>
+                </div>
+                {/* Edge type toggle button removed */}
               </div>
-              {/* Edge type toggle button removed */}
-            </div>
-          </Panel>
-          {error && (
+            </Panel>
+          )}
+          {showUI && error && (
             <Panel position="top-center"><div style={{ padding: '10px', backgroundColor: '#f8d7da', color: '#721c24', borderRadius: '4px', border: '1px solid #f5c6cb' }}>{error}</div></Panel>
           )}
-          {file && (
+          {showUI && file && (
             <Panel position="top-right"><div style={{ padding: '10px', backgroundColor: '#e2f3f5', borderRadius: '4px', border: '1px solid #90cdf4' }}><strong>Current File:</strong> {file.name}</div></Panel>
           )}
           {showFolderDialog && (

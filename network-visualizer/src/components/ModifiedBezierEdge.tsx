@@ -83,7 +83,12 @@ const ModifiedBezierEdge: React.FC<EdgeProps> = ({
     <>
       <path
         id={id}
-        style={style}
+        style={{
+          ...style,
+          strokeWidth: 1.5,  // Explicit stroke width
+          stroke: '#555',    // Explicit stroke color
+          fill: 'none'       // Prevent fill
+        }}
         className="react-flow__edge-path"
         d={edgePath}
         markerEnd={markerEnd}
