@@ -454,6 +454,259 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
     }, 300);
   }, [reactFlowInstance, nodes]);
 
+  // Handle SVG export specifically in the frontend
+  const handleSvgExport = useCallback((filename: string) => {
+    try {
+      if (!reactFlowInstance) {
+        throw new Error('ReactFlow instance not available');
+      }
+  
+      // Get nodes and edges from ReactFlow instance
+      const flowNodes = reactFlowInstance.getNodes();
+      const flowEdges = reactFlowInstance.getEdges();
+      
+      if (flowNodes.length === 0 && flowEdges.length === 0) {
+        throw new Error('No nodes or edges to export');
+      }
+      
+      // Define handle radius as a constant for consistent use
+      const HANDLE_RADIUS = 4;
+      
+      // Calculate the bounding box
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      
+      // Process nodes to find bounds
+      flowNodes.forEach(node => {
+        const x = node.position.x;
+        const y = node.position.y;
+        const width = node.width || 150; // Default width if not specified
+        const height = node.height || 40; // Default height if not specified
+        
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x + width);
+        maxY = Math.max(maxY, y + height);
+      });
+      
+      // Add padding
+      const padding = 30;
+      minX = Math.max(0, minX - padding);
+      minY = Math.max(0, minY - padding);
+      maxX = maxX + padding;
+      maxY = maxY + padding;
+      
+      // Calculate dimensions
+      const width = maxX - minX;
+      const height = maxY - minY;
+
+      const arrowWidth = 6;
+      const arrowHeight = 8;
+      
+      // Create SVG document with proper XML declaration
+      const svgString = `<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+  <!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+  <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="${minX} ${minY} ${width} ${height}">
+    <defs>
+      <!-- Define marker for arrow heads -->
+      <marker id="arrowhead" markerWidth="${arrowWidth}" markerHeight="${arrowHeight}" refX="0" refY="${arrowHeight/2}" orient="auto">
+        <polygon points="0 0, ${arrowWidth} ${arrowHeight/2}, 0 ${arrowHeight}" fill="#555" />
+      </marker>
+    </defs>
+    <rect x="${minX}" y="${minY}" width="${width}" height="${height}" fill="white"/>
+    <g class="edges">
+      ${flowEdges.map(edge => {
+        const sourceNode = flowNodes.find(n => n.id === edge.source);
+        const targetNode = flowNodes.find(n => n.id === edge.target);
+        
+        if (!sourceNode || !targetNode) return '';
+        
+        // Get source and target handle information
+        const sourceHandleId = edge.sourceHandle || 'output-0';
+        const targetHandleId = edge.targetHandle || 'input-0';
+        
+        // Parse handle indices
+        const sourceHandleIndex = parseInt(sourceHandleId.split('-')[1]) || 0;
+        const targetHandleIndex = parseInt(targetHandleId.split('-')[1]) || 0;
+        
+        // Calculate source handle position
+        const sourceWidth = sourceNode.width || 150;
+        const sourceHeight = sourceNode.height || 40;
+        let sourceHandleX;
+        
+        // Calculate output handle positions based on number of outputs
+        const sourceOutputCount = sourceNode.data.outNum || 1;
+        if (sourceOutputCount === 1) {
+          sourceHandleX = sourceNode.position.x + sourceWidth / 2;
+        } else {
+          const leftPadding = 20;
+          const rightPadding = 20;
+          const availableWidth = sourceWidth - leftPadding - rightPadding;
+          const step = availableWidth / (sourceOutputCount - 1);
+          sourceHandleX = sourceNode.position.x + leftPadding + sourceHandleIndex * step;
+        }
+        const sourceHandleY = sourceNode.position.y + sourceHeight;
+        
+        // Calculate target handle position
+        const targetWidth = targetNode.width || 150;
+        const targetHeight = targetNode.height || 40;
+        let targetHandleX;
+        
+        // Calculate input handle positions based on number of inputs
+        const targetInputCount = targetNode.data.inputSources ? 
+          (Array.isArray(targetNode.data.inputSources) ? 
+            targetNode.data.inputSources.length : 
+            Object.keys(targetNode.data.inputSources).length) : 
+          0;
+        
+        if (targetInputCount === 1) {
+          targetHandleX = targetNode.position.x + targetWidth / 2;
+        } else {
+          const leftPadding = 20;
+          const rightPadding = 20;
+          const availableWidth = targetWidth - leftPadding - rightPadding;
+          const step = availableWidth / (targetInputCount - 1);
+          targetHandleX = targetNode.position.x + leftPadding + targetHandleIndex * step;
+        }
+        
+        // Position the target point ABOVE the handle circle
+        // This is the key change - we stop the path HANDLE_RADIUS * 2 pixels above the node
+        const targetHandleY = targetNode.position.y - HANDLE_RADIUS * 2 - arrowWidth;
+        
+        // Calculate control points for bezier curve
+        const verticalOffset = Math.min(200, Math.max(30, Math.abs(targetHandleY - sourceHandleY) * 0.9));
+        let sourceControlY = sourceHandleY + verticalOffset;
+        let targetControlY = targetHandleY - verticalOffset;
+        
+        if (sourceHandleY > targetHandleY) {
+          sourceControlY = sourceHandleY - verticalOffset;
+          targetControlY = targetHandleY + verticalOffset;
+        }
+        
+        const sourceControlX = sourceHandleX;
+        const targetControlX = targetHandleX;
+        
+        // Create path for edge - stopping ABOVE the handle circle
+        const path = `M${sourceHandleX},${sourceHandleY} C${sourceControlX},${sourceControlY} ${targetControlX},${targetControlY} ${targetHandleX},${targetHandleY}`;
+        
+        // Add edge label if available
+        let labelElement = '';
+        if (edge.label) {
+          const labelX = (sourceHandleX + targetHandleX) / 2;
+          const labelY = (sourceHandleY + targetHandleY) / 2 - 10;
+          labelElement = `<text x="${labelX}" y="${labelY}" text-anchor="middle" dominant-baseline="middle" font-family="Arial, sans-serif" font-size="10px" fill="#555" style="background-color: white; padding: 2px;">${edge.label}</text>`;
+        }
+        
+        return `<path d="${path}" stroke="#555" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)"/>${labelElement}`;
+      }).join('\n    ')}
+    </g>
+    <g class="nodes">
+      ${flowNodes.map(node => {
+        const { position, data } = node;
+        const width = node.width || 150;
+        const height = node.height || 40;
+        
+        // Determine background color based on node data
+        let backgroundColor = '#f2c496'; // Default color
+        if (data.isEntry) {
+          backgroundColor = '#a2c3fa';
+        } else if (data.isExit) {
+          backgroundColor = '#ffc891';
+        } else if (data.cls === 'ComposableModel' && data.label) {
+          // Generate color from label for ComposableModel
+          const hash = Math.abs(data.label.split('').reduce((acc: number, char: string) => ((acc << 5) - acc) + char.charCodeAt(0), 0) & 0xFFFFFFFF);
+          const hue = hash % 360;
+          const saturation = 50 + (hash % 20);
+          const lightness = 75 + (hash % 10);
+          backgroundColor = `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+        } else if (data.cls) {
+          // Generate color from class name
+          const hash = Math.abs(data.cls.split('').reduce((acc: number, char: string) => ((acc << 5) - acc) + char.charCodeAt(0), 0) & 0xFFFFFFFF);
+          const hue = hash % 360;
+          const saturation = 50 + (hash % 20);
+          const lightness = 75 + (hash % 10);
+          backgroundColor = `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+        }
+        
+        // Calculate input and output handles
+        const inputCount = data.inputSources ? (Array.isArray(data.inputSources) ? data.inputSources.length : Object.keys(data.inputSources).length) : 0;
+        const outputCount = data.outNum || 1;
+        
+        // Generate input handles (at top of node)
+        let inputHandles = '';
+        if (!data.isEntry && inputCount > 0) {
+          for (let i = 0; i < inputCount; i++) {
+            let leftPosition;
+            if (inputCount === 1) {
+              leftPosition = width / 2; // Center if only one handle
+            } else {
+              const leftPadding = 20; // 20px from left
+              const rightPadding = 20; // 20px from right
+              const availableWidth = width - leftPadding - rightPadding;
+              const step = availableWidth / (inputCount - 1);
+              leftPosition = leftPadding + i * step;
+            }
+            
+            // Smaller handle with white border - using the defined handle radius
+            inputHandles += `<circle cx="${leftPosition}" cy="0" r="${HANDLE_RADIUS}" fill="#555" stroke="white" stroke-width="1" />`;
+          }
+        }
+        
+        // Generate output handles (at bottom of node)
+        let outputHandles = '';
+        if (!data.isExit && outputCount > 0) {
+          for (let i = 0; i < outputCount; i++) {
+            let leftPosition;
+            if (outputCount === 1) {
+              leftPosition = width / 2; // Center if only one handle
+            } else {
+              const leftPadding = 20; // 20px from left
+              const rightPadding = 20; // 20px from right
+              const availableWidth = width - leftPadding - rightPadding;
+              const step = availableWidth / (outputCount - 1);
+              leftPosition = leftPadding + i * step;
+            }
+            
+            // Smaller handle with white border - using the defined handle radius
+            outputHandles += `<circle cx="${leftPosition}" cy="${height}" r="${HANDLE_RADIUS}" fill="#555" stroke="white" stroke-width="1" />`;
+          }
+        }
+        
+        // Adjust text positioning to be above and below the middle line
+        const middleY = height / 2;
+        const labelY = middleY - 2; // Just above the middle line
+        const classY = middleY + 12; // Just below the middle line
+        
+        return `<g transform="translate(${position.x},${position.y})">
+        <rect width="${width}" height="${height}" rx="5" ry="5" fill="${backgroundColor}" stroke="#949494" stroke-width="1"/>
+        <text x="${width/2}" y="${labelY}" text-anchor="middle" font-family="Arial, sans-serif" font-size="12px" font-weight="bold" fill="#000">${data.label || ''}</text>
+        ${data.cls ? `<text x="${width/2}" y="${classY}" text-anchor="middle" font-family="Arial, sans-serif" font-size="10px" fill="#000">${data.cls}</text>` : ''}
+        ${inputHandles}
+        ${outputHandles}
+      </g>`;
+      }).join('\n    ')}
+    </g>
+  </svg>`;
+      
+      // Create a Blob and download
+      const blob = new Blob([svgString], { type: 'image/svg+xml' });
+      const url = URL.createObjectURL(blob);
+      
+      const downloadLink = document.createElement('a');
+      downloadLink.href = url;
+      downloadLink.download = filename;
+      document.body.appendChild(downloadLink);
+      downloadLink.click();
+      document.body.removeChild(downloadLink);
+      
+      URL.revokeObjectURL(url);
+      
+      console.log("SVG export completed successfully");
+    } catch (error) {
+      console.error('Error in SVG export function:', error);
+      setError(`Failed to export SVG: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }, [reactFlowInstance, setError]);
+
   // Refactor the export functionality into a reusable function
   const exportImage = useCallback((format: 'png' | 'svg') => {
     if (reactFlowWrapper.current && reactFlowInstance && nodes.length > 0) {
@@ -469,83 +722,94 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
         try {
           console.log(`Starting ${format} export process...`);
           
-          // Fit all nodes to ensure everything is visible
-          reactFlowInstance.fitView({ padding: 0.3 });
+          // Get the current configuration for filename
+          const currentState = historyStack[currentGraphIndex];
+          const currentConfig = currentState?.config;
           
-          // Wait for the fitView animation to complete
-          setTimeout(() => {
-            // Get the current configuration for filename
-            const currentState = historyStack[currentGraphIndex];
-            const currentConfig = currentState?.config;
-            
-            // Generate filename
-            let filename = 'network-diagram';
-            if (currentConfig && 'name' in currentConfig) {
-              filename = currentConfig.name as string;
-            } else {
-              const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-              filename = `network-diagram-${timestamp}`;
+          // Generate filename
+          let filename = 'network-diagram';
+          if (currentConfig && 'name' in currentConfig) {
+            filename = currentConfig.name as string;
+          } else {
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            filename = `network-diagram-${timestamp}`;
+          }
+          
+          // Add the appropriate extension
+          if (format === 'svg') {
+            if (!filename.endsWith('.svg')) {
+              filename = filename.replace(/\.png$/, '') + '.svg';
             }
-            
-            // Add the appropriate extension
-            if (format === 'svg') {
-              if (!filename.endsWith('.svg')) {
-                filename = filename.replace(/\.png$/, '') + '.svg';
-              }
-            } else {
-              if (!filename.endsWith('.png')) {
-                filename = filename.replace(/\.svg$/, '') + '.png';
-              }
+          } else {
+            if (!filename.endsWith('.png')) {
+              filename = filename.replace(/\.svg$/, '') + '.png';
             }
+          }
+          
+          console.log(`Using filename: ${filename}`);
+          
+          if (format === 'svg') {
+            // SVG-specific handling - frontend only
+            // No need for fitView since we calculate our own viewBox
+            handleSvgExport(filename);
             
-            console.log(`Using filename: ${filename}`);
-            
-            // Choose the appropriate export function based on format
-            const exportFunction = format === 'svg' ? toSvg : toPng;
-            
-            // Capture the entire ReactFlow container
-            exportFunction(reactFlowWrapper.current!, { 
-              backgroundColor: '#ffffff',
-              pixelRatio: 3, // High resolution
-              filter: (node) => {
-                // Filter out UI elements from the capture
-                return !node.classList?.contains('react-flow__controls') && 
-                       !node.classList?.contains('react-flow__minimap') &&
-                       !node.classList?.contains('react-flow__panel');
-              }
-            })
-            .then((dataUrl: string) => {
-              console.log(`${format.toUpperCase()} captured successfully, sending to backend for cropping...`);
-              
-              // Send to backend for cropping
-              return cropImage(dataUrl, format, 30); // 30px padding
-            })
-            .then((croppedDataUrl: string) => {
-              console.log(`Cropped ${format.toUpperCase()} received from backend`);
-              
-              // Create download link
-              const downloadLink = document.createElement('a');
-              downloadLink.href = croppedDataUrl;
-              downloadLink.download = filename;
-              document.body.appendChild(downloadLink);
-              downloadLink.click();
-              document.body.removeChild(downloadLink);
-              
-              // Clean up the object URL
-              URL.revokeObjectURL(croppedDataUrl);
-            })
-            .catch((error: Error) => {
-              console.error(`Error exporting ${format.toUpperCase()}:`, error);
-              setError(`Failed to export ${format.toUpperCase()}. Please try again.`);
-            })
-            .finally(() => {
-              console.log("Restoring UI and viewport");
-              // Restore UI elements and viewport
+            // Restore UI and viewport
+            setTimeout(() => {
+              console.log("Restoring UI and viewport after SVG export");
               setShowUI(true);
               setShowBackground(true);
               reactFlowInstance.setViewport(currentViewport);
-            });
-          }, 500); // Wait for fitView animation
+            }, 100);
+          } else {
+            // For PNG, we still need to fit the view to ensure everything is visible
+            reactFlowInstance.fitView({ padding: 0.1 });
+            
+            // Wait for the fitView animation to complete
+            setTimeout(() => {
+              // PNG handling - use backend cropping
+              toPng(reactFlowWrapper.current!, { 
+                backgroundColor: '#ffffff',
+                pixelRatio: 3, // High resolution
+                filter: (node) => {
+                  // Filter out UI elements from the capture
+                  return !node.classList?.contains('react-flow__controls') && 
+                         !node.classList?.contains('react-flow__minimap') &&
+                         !node.classList?.contains('react-flow__panel');
+                }
+              })
+              .then((dataUrl: string) => {
+                console.log(`PNG captured successfully, sending to backend for cropping...`);
+                
+                // Send to backend for cropping
+                return cropImage(dataUrl, format, 30); // 30px padding
+              })
+              .then((croppedDataUrl: string) => {
+                console.log(`Cropped PNG received from backend`);
+                
+                // Create download link
+                const downloadLink = document.createElement('a');
+                downloadLink.href = croppedDataUrl;
+                downloadLink.download = filename;
+                document.body.appendChild(downloadLink);
+                downloadLink.click();
+                document.body.removeChild(downloadLink);
+                
+                // Clean up the object URL
+                URL.revokeObjectURL(croppedDataUrl);
+              })
+              .catch((error: Error) => {
+                console.error(`Error exporting PNG:`, error);
+                setError(`Failed to export PNG. Please try again.`);
+              })
+              .finally(() => {
+                console.log("Restoring UI and viewport");
+                // Restore UI elements and viewport
+                setShowUI(true);
+                setShowBackground(true);
+                reactFlowInstance.setViewport(currentViewport);
+              });
+            }, 500); // Wait for fitView animation
+          }
         } catch (error) {
           console.error('Error during export:', error);
           setShowUI(true);
@@ -556,7 +820,7 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
     } else {
       setError('No nodes to export. Please load a graph first.');
     }
-  }, [historyStack, currentGraphIndex, reactFlowInstance, nodes, setError]);
+  }, [historyStack, currentGraphIndex, reactFlowInstance, nodes, setError, handleSvgExport]);
 
   // Create specific handlers for PNG and SVG export
   const handleExportPNG = useCallback(() => exportImage('png'), [exportImage]);
