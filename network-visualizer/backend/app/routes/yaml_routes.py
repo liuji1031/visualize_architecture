@@ -30,6 +30,9 @@ if not GCS_BUCKET_NAME:
     # Optionally, raise an error or use a default for local dev?
     # raise ValueError("GCS_BUCKET_NAME environment variable is required.")
 
+# Define the path for pre-uploaded configurations
+PRESETS_PATH = os.environ.get('PRESETS_PATH', 'presets/')
+
 # Define a temporary directory for file uploads
 TEMP_UPLOAD_DIR = os.environ.get('TEMP_UPLOAD_DIR', '/tmp/yaml_uploads')
 # Ensure the directory exists
@@ -535,6 +538,278 @@ def crop_image_endpoint():
         
     except Exception as e:
         error_message = f"Error cropping image: {str(e)}"
+        tb_str = traceback.format_exc()
+        print(f"{error_message}\nTraceback:\n{tb_str}")
+        return jsonify({'error': error_message}), 500
+
+@yaml_bp.route('/list-presets', methods=['GET'])
+def list_presets():
+    """
+    List all available pre-uploaded configurations from the GCS bucket.
+    
+    Returns:
+        JSON object containing the list of available presets (subfolder names).
+    """
+    if not gcs_bucket:
+        print("ERROR: GCS bucket not configured. Check GCS_BUCKET_NAME environment variable.")
+        return jsonify({'error': 'GCS not configured on server'}), 500
+    
+    try:
+        print("=" * 80)
+        print("DETAILED PRESET LISTING DEBUG INFO")
+        print("=" * 80)
+        print(f"DEBUG: Full GCS path being searched: gs://{GCS_BUCKET_NAME}/{PRESETS_PATH}")
+        print(f"DEBUG: Bucket name: {GCS_BUCKET_NAME}")
+        print(f"DEBUG: Preset path prefix: {PRESETS_PATH}")
+        
+        # List all blobs under the presets path (no delimiter)
+        print(f"DEBUG: Listing all blobs under prefix '{PRESETS_PATH}' to find model.yaml files:")
+        all_blobs = list(storage_client.list_blobs(GCS_BUCKET_NAME, prefix=PRESETS_PATH))
+        print(f"DEBUG: Found {len(all_blobs)} total blobs under prefix.")
+
+        # Get unique parent folder names containing 'model.yaml'
+        prefixes = set()
+        for blob in all_blobs:
+            print(f"DEBUG: Checking blob: {blob.name}")
+            # Check if the blob is named 'model.yaml' and is inside a subfolder of PRESETS_PATH
+            if blob.name.endswith('/model.yaml') and blob.name != PRESETS_PATH + 'model.yaml':
+                # Extract the path part before '/model.yaml'
+                path_part = blob.name[:-len('/model.yaml')] # e.g., "presets/GoogLeNet"
+                print(f"DEBUG: Found model.yaml at: {blob.name}, path part: {path_part}")
+                # Ensure it's under the PRESETS_PATH
+                if path_part.startswith(PRESETS_PATH):
+                    # Get the relative path from PRESETS_PATH
+                    relative_folder_path = path_part[len(PRESETS_PATH):] # e.g., "GoogLeNet"
+                    # Get the top-level folder name
+                    folder_name = relative_folder_path.split('/')[0]
+                    if folder_name: # Ensure it's not empty
+                        print(f"DEBUG: Extracted preset folder name: '{folder_name}'")
+                        prefixes.add(folder_name)
+                    else:
+                         print(f"DEBUG: Skipping blob {blob.name}, couldn't extract valid folder name.")
+                else:
+                     print(f"DEBUG: Skipping blob {blob.name}, path part doesn't start with {PRESETS_PATH}")
+            else:
+                 print(f"DEBUG: Skipping blob {blob.name}, not a model.yaml in a subfolder.")
+        
+        # Convert to sorted list
+        preset_list = sorted(list(prefixes))
+        
+        print(f"DEBUG: Found {len(preset_list)} presets: {preset_list}")
+        
+        # Return the list of presets with CORS header
+        response = make_response(jsonify({'presets': preset_list}))
+        # Allow requests from any origin during development/debugging
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        return response
+    except Exception as e:
+        error_message = f"Error listing presets: {str(e)}"
+        tb_str = traceback.format_exc()
+        print(f"ERROR: {error_message}\nTraceback:\n{tb_str}")
+        
+        # Return error with CORS header and more detailed information
+        response = make_response(jsonify({
+            'error': error_message,
+            'details': {
+                'bucket': GCS_BUCKET_NAME,
+                'presets_path': PRESETS_PATH,
+                'traceback': tb_str
+            }
+        }))
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        return response, 500
+
+@yaml_bp.route('/load-preset', methods=['POST'])
+def load_preset():
+    """
+    Load a pre-uploaded configuration from the GCS bucket.
+    
+    Request body:
+        presetName: The name of the preset to load (subfolder name or file name without extension)
+    
+    Returns:
+        JSON object containing the processed config and the uploadId.
+    """
+    if not gcs_bucket:
+        return jsonify({'error': 'GCS not configured on server'}), 500
+    
+    data = request.json
+    if not data or 'presetName' not in data:
+        return jsonify({'error': 'No preset name provided'}), 400
+    
+    preset_name = data['presetName']
+    
+    try:
+        print(f"DEBUG: Loading preset '{preset_name}'")
+        
+        # Generate a new upload ID for this preset
+        upload_id = str(uuid.uuid4())
+        gcs_prefix = f"uploads/{upload_id}/"
+        
+        # First check if this is a direct YAML file
+        direct_yaml_path = f"{PRESETS_PATH}{preset_name}.yaml"
+        direct_yml_path = f"{PRESETS_PATH}{preset_name}.yml"
+        
+        # Check if the preset is a direct YAML file
+        direct_yaml_blob = None
+        try:
+            direct_yaml_blob = gcs_bucket.blob(direct_yaml_path)
+            if direct_yaml_blob.exists():
+                print(f"DEBUG: Found direct YAML file: {direct_yaml_path}")
+                main_file = f"{preset_name}.yaml"
+                
+                # Copy the YAML file to the uploads location
+                new_blob_name = f"{gcs_prefix}{preset_name}.yaml"
+                new_blob = gcs_bucket.blob(new_blob_name)
+                
+                # Copy the blob
+                token = None
+                rewrite_token = None
+                while True:
+                    token, rewrite_token, bytes_rewritten = new_blob.rewrite(
+                        source=direct_yaml_blob, token=rewrite_token
+                    )
+                    if token is None:
+                        break
+                
+                print(f"DEBUG: Copied {direct_yaml_path} to {new_blob_name}")
+                
+                # Process the YAML file
+                print(f"DEBUG: Processing direct YAML file: {preset_name}.yaml")
+                config = process_yaml_file(upload_id=upload_id, relative_path=f"{preset_name}.yaml")
+                
+                # Return config and the upload ID with CORS header
+                response = make_response(jsonify({'config': config, 'uploadId': upload_id}))
+                response.headers['Access-Control-Allow-Origin'] = 'https://network-visualizer-36300.web.app'
+                return response
+        except Exception as e:
+            print(f"DEBUG: Error checking for direct YAML file: {e}")
+            # Continue to check for folder
+        
+        # If not a direct file, check for .yml extension
+        try:
+            direct_yml_blob = gcs_bucket.blob(direct_yml_path)
+            if direct_yml_blob.exists():
+                print(f"DEBUG: Found direct YML file: {direct_yml_path}")
+                main_file = f"{preset_name}.yml"
+                
+                # Copy the YAML file to the uploads location
+                new_blob_name = f"{gcs_prefix}{preset_name}.yml"
+                new_blob = gcs_bucket.blob(new_blob_name)
+                
+                # Copy the blob
+                token = None
+                rewrite_token = None
+                while True:
+                    token, rewrite_token, bytes_rewritten = new_blob.rewrite(
+                        source=direct_yml_blob, token=rewrite_token
+                    )
+                    if token is None:
+                        break
+                
+                print(f"DEBUG: Copied {direct_yml_path} to {new_blob_name}")
+                
+                # Process the YAML file
+                print(f"DEBUG: Processing direct YML file: {preset_name}.yml")
+                config = process_yaml_file(upload_id=upload_id, relative_path=f"{preset_name}.yml")
+                
+                # Return config and the upload ID with CORS header
+                response = make_response(jsonify({'config': config, 'uploadId': upload_id}))
+                response.headers['Access-Control-Allow-Origin'] = 'https://network-visualizer-36300.web.app'
+                return response
+        except Exception as e:
+            print(f"DEBUG: Error checking for direct YML file: {e}")
+            # Continue to check for folder
+        
+        # If not a direct file, check for folder
+        preset_path = f"{PRESETS_PATH}{preset_name}/"
+        main_file = "model.yaml"  # Default main file name
+        
+        print(f"DEBUG: Checking for folder at path: {preset_path}")
+        
+        # Check if the preset exists as a folder
+        blobs = list(storage_client.list_blobs(GCS_BUCKET_NAME, prefix=preset_path))
+        if not blobs:
+            print(f"DEBUG: No blobs found with prefix '{preset_path}'")
+            return jsonify({'error': f"Preset '{preset_name}' not found as file or folder"}), 404
+        
+        print(f"DEBUG: Found {len(blobs)} blobs in preset folder '{preset_name}'")
+        for blob in blobs:
+            print(f"DEBUG: Found blob: {blob.name}")
+        
+        # Find the main file
+        main_file_blob = None
+        for blob in blobs:
+            if blob.name.endswith('/model.yaml') or blob.name.endswith('/main.yaml'):
+                main_file_blob = blob
+                main_file = blob.name[len(preset_path):]  # Get relative path
+                print(f"DEBUG: Found main file: {main_file}")
+                break
+        
+        if not main_file_blob:
+            # If no model.yaml or main.yaml found, look for any .yaml file
+            for blob in blobs:
+                if blob.name.endswith('.yaml') or blob.name.endswith('.yml'):
+                    main_file_blob = blob
+                    main_file = blob.name[len(preset_path):]  # Get relative path
+                    print(f"DEBUG: Using {main_file} as main file")
+                    break
+        
+        if not main_file_blob:
+            print(f"DEBUG: No YAML files found in preset folder '{preset_name}'")
+            return jsonify({'error': f"No YAML files found in preset folder '{preset_name}'"}), 404
+        
+        print(f"DEBUG: Generated upload ID: {upload_id}")
+        
+        # Copy each blob to the new upload location
+        for blob in blobs:
+            # Get the relative path within the preset folder
+            relative_path = blob.name[len(preset_path):]
+            if not relative_path:  # Skip the folder itself
+                continue
+                
+            # Create a new blob in the uploads location
+            new_blob_name = f"{gcs_prefix}{relative_path}"
+            new_blob = gcs_bucket.blob(new_blob_name)
+            
+            # Copy the blob
+            token = None
+            rewrite_token = None
+            while True:
+                token, rewrite_token, bytes_rewritten = new_blob.rewrite(
+                    source=blob, token=rewrite_token
+                )
+                if token is None:
+                    break
+            
+            print(f"DEBUG: Copied {blob.name} to {new_blob_name}")
+        
+        # Process the main YAML file
+        print(f"DEBUG: Processing main file: {main_file}")
+        config = process_yaml_file(upload_id=upload_id, relative_path=main_file)
+        
+        # Check for embedded errors
+        processing_errors = []
+        if isinstance(config, dict) and 'modules' in config:
+            for module_name, module_data in config['modules'].items():
+                if isinstance(module_data, dict) and isinstance(module_data.get('config'), dict) and 'error' in module_data['config']:
+                    processing_errors.append({
+                        'module': module_name,
+                        'error': module_data['config']['error']
+                    })
+        if processing_errors:
+            print(f"Found errors during processing: {processing_errors}")
+            # Clean up GCS on error
+            delete_gcs_prefix(gcs_prefix)
+            return jsonify({'error': 'Errors occurred during YAML processing.', 'details': processing_errors}), 422
+        
+        # Return config and the upload ID with CORS header
+        response = make_response(jsonify({'config': config, 'uploadId': upload_id}))
+        response.headers['Access-Control-Allow-Origin'] = 'https://network-visualizer-36300.web.app'
+        return response
+        
+    except Exception as e:
+        error_message = f"Error loading preset '{preset_name}': {str(e)}"
         tb_str = traceback.format_exc()
         print(f"{error_message}\nTraceback:\n{tb_str}")
         return jsonify({'error': error_message}), 500

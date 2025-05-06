@@ -41,7 +41,10 @@ import {
   UploadFolderOptions,
   cleanupUpload, // Renamed import
   UploadResponse, // Import UploadResponse type
-  cropImage // Import cropImage function
+  cropImage, // Import cropImage function
+  listPresetConfigurations,
+  loadPresetConfiguration,
+  API_BASE_URL // Import API_BASE_URL
 } from '../services/api';
 import { processNetworkStructure, NODE_WIDTH, HORIZONTAL_SPACING } from '../utils/networkProcessor';
 import { getNodeBackgroundColor } from '../utils/colorUtils'; // Import color util
@@ -75,6 +78,9 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
   const [currentUploadId, setCurrentUploadId] = useState<string | null>(null); // State for upload ID
   const [showUI, setShowUI] = useState<boolean>(true); // Control UI visibility during export
   const [showBackground, setShowBackground] = useState<boolean>(true); // Control background visibility during export
+  const [presets, setPresets] = useState<string[]>([]); // Available preset configurations
+  const [isLoadingPresets, setIsLoadingPresets] = useState<boolean>(false); // Loading state for presets
+  const [selectedPreset, setSelectedPreset] = useState<string>(""); // Selected preset
   
   // Add triggerNodeId to track which node was clicked to navigate
   type GraphState = { nodes: Node[]; edges: Edge[]; config?: YamlConfig; triggerNodeId?: string }; 
@@ -234,6 +240,44 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
     }
   }, [yamlContent, processConfig]);
 
+  // Fetch available presets on component mount
+  useEffect(() => {
+    const fetchPresets = async () => {
+      try {
+        console.log('NetworkVisualizer: Starting to fetch preset configurations...');
+        setIsLoadingPresets(true);
+        
+        // Check if API_BASE_URL is accessible
+        console.log('NetworkVisualizer: Checking API connectivity...');
+        try {
+          const testResponse = await fetch(`${API_BASE_URL}/yaml/list-presets`, { 
+            method: 'HEAD',
+            cache: 'no-store' // Bypass cache
+          });
+          console.log(`NetworkVisualizer: API connectivity test result: ${testResponse.status} ${testResponse.statusText}`);
+        } catch (connectError) {
+          console.error('NetworkVisualizer: API connectivity test failed:', connectError);
+        }
+        
+        console.log('NetworkVisualizer: Calling listPresetConfigurations()...');
+        const presetList = await listPresetConfigurations();
+        
+        console.log(`NetworkVisualizer: Setting ${presetList.length} presets to state`);
+        setPresets(presetList);
+        console.log(`NetworkVisualizer: Loaded ${presetList.length} preset configurations:`, presetList);
+      } catch (err: any) {
+        console.error('NetworkVisualizer: Error fetching preset configurations:', err);
+        // Don't show error to user, just log it
+        setError(`Failed to load preset configurations. Check console for details.`);
+      } finally {
+        console.log('NetworkVisualizer: Finished preset loading process');
+        setIsLoadingPresets(false);
+      }
+    };
+    
+    fetchPresets();
+  }, []);
+
   useEffect(() => {
     if (yamlUrl) {
       fetchYamlFile(yamlUrl)
@@ -362,7 +406,7 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
     }
   }, [setError, setZipFile, setFolderFiles, setShowFolderDialog, currentUploadId, setCurrentUploadId]);
 
-  // Updated handleUploadClick - cleanup is now in handleFileChange
+  // Updated handleUploadClick -cleanu isis niwCehandleFChne
   const handleUploadClick = useCallback(() => {
     fileInputRef.current?.click();
   }, []);
@@ -371,6 +415,40 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
   const handleUploadFolderClick = useCallback(() => {
     folderInputRef.current?.click();
   }, []);
+  
+  // Handle preset selection change
+  const handlePresetChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
+    const presetName = e.target.value;
+    console.log(`NetworkVisualizer: Preset selection changed to: "${presetName}"`);
+    setSelectedPreset(presetName);
+    
+    if (presetName) {
+      setError(null);
+      console.log(`NetworkVisualizer: Starting to load preset: "${presetName}"`);
+      
+      // Clean up previous upload if any
+      console.log(`NetworkVisualizer: Cleaning up previous upload ID: ${currentUploadId}`);
+      cleanupUpload(currentUploadId).finally(() => {
+        setCurrentUploadId(null);
+        
+        // Load the selected preset
+        console.log(`NetworkVisualizer: Calling loadPresetConfiguration for "${presetName}"...`);
+        loadPresetConfiguration(presetName)
+          .then((response: UploadResponse) => {
+            console.log(`NetworkVisualizer: Successfully loaded preset "${presetName}" with upload ID: ${response.uploadId}`);
+            setCurrentUploadId(response.uploadId);
+            processConfig(response.config, true);
+            setFile(null); // Clear the file state since we're using a preset
+          })
+          .catch((err: any) => {
+            const errorMsg = `Error loading preset '${presetName}': ${err.message}`;
+            console.error(`NetworkVisualizer: ${errorMsg}`, err);
+            setError(errorMsg);
+            setCurrentUploadId(null);
+          });
+      });
+    }
+  }, [currentUploadId, processConfig, setError, setFile, setCurrentUploadId]);
 
   // Updated handleConfirmFolder to handle UploadResponse
   const handleConfirmFolder = useCallback(() => {
@@ -867,6 +945,41 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
                 <input type="file" ref={folderInputRef} style={{ display: 'none' }} webkitdirectory="" directory="" multiple onChange={handleFolderChange} />
                 <button onClick={handleUploadClick} style={{ padding: '8px 12px', backgroundColor: '#4a90e2', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>Upload YAML File</button>
                 <button onClick={handleUploadFolderClick} style={{ padding: '8px 12px', backgroundColor: '#28a745', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>Upload Folder</button>
+                
+                {/* Preset configurations dropdown */}
+                <div style={{ backgroundColor: '#f8f9fa', padding: '10px', borderRadius: '4px', border: '1px solid #ddd' }}>
+                  <label htmlFor="preset-select" style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold', fontSize: '14px' }}>
+                    Pre-uploaded Configurations:
+                  </label>
+                  <select 
+                    id="preset-select"
+                    value={selectedPreset}
+                    onChange={handlePresetChange}
+                    style={{ 
+                      width: '100%', 
+                      padding: '8px', 
+                      borderRadius: '4px', 
+                      border: '1px solid #ced4da',
+                      backgroundColor: isLoadingPresets ? '#e9ecef' : 'white',
+                      cursor: isLoadingPresets ? 'wait' : 'pointer'
+                    }}
+                    disabled={isLoadingPresets}
+                  >
+                    <option value="">-- Select a configuration --</option>
+                    {presets.map((preset) => (
+                      <option key={preset} value={preset}>{preset}</option>
+                    ))}
+                  </select>
+                  {isLoadingPresets && (
+                    <div style={{ fontSize: '12px', color: '#6c757d', marginTop: '5px' }}>Loading configurations...</div>
+                  )}
+                  {!isLoadingPresets && presets.length === 0 && (
+                    <div style={{ fontSize: '12px', color: '#dc3545', marginTop: '5px' }}>
+                      No configurations found. Check console for details.
+                    </div>
+                  )}
+                </div>
+                
                 <button onClick={resetView} style={{ padding: '8px 12px', backgroundColor: '#6c757d', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>Reset View</button>
                 <button onClick={handleExportPNG} style={{ padding: '8px 12px', backgroundColor: '#9c27b0', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>Download PNG</button>
                 <button onClick={handleExportSVG} style={{ padding: '8px 12px', backgroundColor: '#673ab7', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>Download SVG</button>

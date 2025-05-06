@@ -8,6 +8,13 @@
 import { YamlConfig } from '../types';
 
 /**
+ * Response from the list-presets endpoint
+ */
+export interface PresetsResponse {
+  presets: string[];
+}
+
+/**
  * Response from the check-references endpoint
  */
 export interface ReferencesResponse {
@@ -32,7 +39,7 @@ export interface UploadResponse {
 }
 
 // Backend API base URL
-const API_BASE_URL = 'https://network-visualizer-backend-846251040656.us-east4.run.app/api'; // Will be replaced during build/deployment
+export const API_BASE_URL = 'https://network-visualizer-backend-846251040656.us-east4.run.app/api'; // Will be replaced during build/deployment
 
 /**
  * Clean up the GCS resources for a specific upload session
@@ -309,6 +316,92 @@ export const cropImage = async (
     return URL.createObjectURL(blob);
   } catch (error) {
     console.error('Error cropping image:', error);
+    throw error;
+  }
+};
+
+/**
+ * List all available pre-uploaded configurations from the GCS bucket
+ * @returns Promise resolving to a list of preset names
+ */
+export const listPresetConfigurations = async (): Promise<string[]> => {
+  try {
+    console.log(`Fetching preset configurations from ${API_BASE_URL}/yaml/list-presets`);
+    
+    const response = await fetch(`${API_BASE_URL}/yaml/list-presets`, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+      },
+    });
+
+    console.log(`Received response with status: ${response.status} ${response.statusText}`);
+
+    if (!response.ok) {
+      const errorData = await response.json().catch((parseError) => {
+        console.error('Error parsing error response:', parseError);
+        return {};
+      });
+      
+      console.error('Error response details:', errorData);
+      
+      if (errorData.details) {
+        console.error('Additional error details:', errorData.details);
+      }
+      
+      throw new Error(`Failed to list presets: ${response.statusText} - ${errorData.error || 'Unknown error'}`);
+    }
+
+    const data: PresetsResponse = await response.json();
+    console.log(`Successfully fetched ${data.presets.length} preset configurations:`, data.presets);
+    return data.presets;
+  } catch (error) {
+    console.error('Error listing preset configurations:', error);
+    // Return empty array instead of throwing to prevent UI errors
+    return [];
+  }
+};
+
+/**
+ * Load a pre-uploaded configuration from the GCS bucket
+ * @param presetName - The name of the preset to load (subfolder name)
+ * @returns Promise resolving to an object containing parsed YAML configuration and uploadId
+ */
+export const loadPresetConfiguration = async (presetName: string): Promise<UploadResponse> => {
+  try {
+    console.log(`Loading preset configuration '${presetName}' from ${API_BASE_URL}/yaml/load-preset`);
+    
+    const response = await fetch(`${API_BASE_URL}/yaml/load-preset`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ presetName }),
+    });
+
+    console.log(`Received response with status: ${response.status} ${response.statusText}`);
+
+    if (!response.ok) {
+      const errorData = await response.json().catch((parseError) => {
+        console.error('Error parsing error response:', parseError);
+        return {};
+      });
+      
+      console.error('Error response details:', errorData);
+      
+      if (errorData.details) {
+        console.error('Additional error details:', errorData.details);
+      }
+      
+      throw new Error(`Failed to load preset '${presetName}': ${response.statusText} - ${errorData.error || 'Unknown error'}`);
+    }
+
+    // Expect { config: YamlConfig, uploadId: string }
+    const data = await response.json();
+    console.log(`Successfully loaded preset configuration '${presetName}' with uploadId: ${data.uploadId}`);
+    return data;
+  } catch (error) {
+    console.error(`Error loading preset configuration '${presetName}':`, error);
     throw error;
   }
 };
