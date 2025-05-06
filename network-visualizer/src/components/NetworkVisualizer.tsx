@@ -934,6 +934,8 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
                 nodeStrokeWidth={3} // Optional: Add stroke width
                 pannable // Enable panning on the minimap
                 zoomable // Enable zooming on the minimap
+                style={{ left: 'auto', right: 'auto', bottom: '120px' }}
+                // Optional: Custom style for positioning
               />
             </>
           )}
