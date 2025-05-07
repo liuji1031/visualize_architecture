@@ -30,13 +30,13 @@ export const generateColorFromString = (str: string): string => {
 
 // Define base node type styles (can be used in both CustomNode and MiniMap)
 export const nodeTypeStyles = {
-  entry: {
-    backgroundColor: '#a2c3fa',
-    borderColor: '#949494'
+  input: {
+    backgroundColor: '#ffffff', // White
+    borderColor: '#000000'  // Black
   },
-  exit: {
-    backgroundColor: '#ffc891',
-    borderColor: '#949494'
+  output: {
+    backgroundColor: '#ffffff', // White
+    borderColor: '#000000'  // Black
   },
   default: {
     backgroundColor: '#f2c496', // Default color used if no cls/label
@@ -46,10 +46,10 @@ export const nodeTypeStyles = {
 
 // Function to get the background color for a node based on its data
 export const getNodeBackgroundColor = (nodeData: any): string => {
-  const { label, cls, isEntry, isExit } = nodeData || {};
+  const { label, cls, isInput, isOutput } = nodeData || {};
 
-  if (isEntry) return nodeTypeStyles.entry.backgroundColor;
-  if (isExit) return nodeTypeStyles.exit.backgroundColor;
+  if (isInput) return nodeTypeStyles.input.backgroundColor;
+  if (isOutput) return nodeTypeStyles.output.backgroundColor;
   
   if (cls === 'ComposableModel' && label) {
     return generateColorFromString(label); // Use label for ComposableModel

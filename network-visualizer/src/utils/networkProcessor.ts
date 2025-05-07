@@ -17,8 +17,8 @@ export const processNetworkStructure = (config: YamlConfig): NetworkStructure =>
   
   // Process nodes
   const nodes = Object.entries(modules).map(([moduleName, moduleData]) => {
-    const isEntry = moduleName === 'entry';
-    const isExit = moduleName === 'exit';
+    const isInput = moduleName === 'input';
+    const isOutput = moduleName === 'output';
     
     // Handle different module data formats
     let cls: string | undefined;
@@ -27,11 +27,11 @@ export const processNetworkStructure = (config: YamlConfig): NetworkStructure =>
     let inputSources: string[] | Record<string, string> | undefined;
     let configData: Record<string, any> | string | undefined; // Renamed to avoid conflict with config var name
     
-    if (isEntry) {
-      // Entry module has inputs directly as an array
+    if (isInput) {
+      // Input module has inputs directly as an array
       inputSources = moduleData as string[];
-    } else if (isExit) {
-      // Exit module has outputs directly as a record
+    } else if (isOutput) {
+      // Output module has outputs directly as a record
       inputSources = moduleData as Record<string, string>;
     } else {
       // Regular module with YamlModule structure
@@ -48,14 +48,14 @@ export const processNetworkStructure = (config: YamlConfig): NetworkStructure =>
 
     return {
       id: moduleName,
-      type: isEntry ? 'input' : isExit ? 'output' : 'default',
+      type: isInput ? 'input' : isOutput ? 'output' : 'default',
       position: { x: 0, y: 0 }, // Will be calculated by layout algorithm
       data: {
         label: moduleName,
         cls,
         module_type, // Add module_type to node data
-        isEntry,
-        isExit,
+        isInput,
+        isOutput,
         outNum,
         inputSources, // Include input sources information
         config: configData // Use renamed variable
@@ -67,18 +67,18 @@ export const processNetworkStructure = (config: YamlConfig): NetworkStructure =>
   const edges: NetworkStructure['edges'] = [];
   
   Object.entries(modules).forEach(([moduleName, moduleData]) => {
-    if (moduleName === 'entry') {
-      // Skip entry module as it doesn't have real connections
+    if (moduleName === 'input') {
+      // Skip input module as it doesn't have real connections
       return;
     }
     
-    if (moduleName === 'exit') {
-      // Handle exit module which can have inputs as either a list or a dictionary
+    if (moduleName === 'output') {
+      // Handle output module which can have inputs as either a list or a dictionary
       if (Array.isArray(moduleData)) {
-        // Exit module has inputs as a list
-        const exitInputs = moduleData as string[];
+        // Output module has inputs as a list
+        const outputInputs = moduleData as string[];
         
-        exitInputs.forEach((inputSource, index) => {
+        outputInputs.forEach((inputSource, index) => {
           const [sourceName, sourceOutput] = parseInputSource(inputSource);
           
           // Check if the source module has multiple outputs
@@ -107,10 +107,10 @@ export const processNetworkStructure = (config: YamlConfig): NetworkStructure =>
           });
         });
       } else {
-        // Exit module has inputs as a dictionary
-        const exitInputs = moduleData as Record<string, string>;
+        // Output module has inputs as a dictionary
+        const outputInputs = moduleData as Record<string, string>;
         
-        Object.entries(exitInputs).forEach(([outputName, inputSource]) => {
+        Object.entries(outputInputs).forEach(([outputName, inputSource]) => {
           const [sourceName, sourceOutput] = parseInputSource(inputSource);
           
           // Check if the source module has multiple outputs
@@ -148,17 +148,17 @@ export const processNetworkStructure = (config: YamlConfig): NetworkStructure =>
       const inputs = regularModule.inp_src as string[];
       
       inputs.forEach((input, index) => {
-        // Check if the input is referencing an entry module input
-        const entryInputs = modules.entry as string[];
-        const entryInputIndex = entryInputs.indexOf(input);
+        // Check if the input is referencing an input module input
+        const inputInputs = modules.input as string[];
+        const inputInputIndex = inputInputs.indexOf(input);
         
-        if (entryInputIndex !== -1) {
-          // Connection from entry module with arbitrary input name
+        if (inputInputIndex !== -1) {
+          // Connection from input module with arbitrary input name
           edges.push({
-            id: `entry-${input}-to-${moduleName}-${index}`,
-            source: 'entry',
+            id: `input-${input}-to-${moduleName}-${index}`,
+            source: 'input',
             target: moduleName,
-            sourceHandle: `output-${entryInputIndex}`,
+            sourceHandle: `output-${inputInputIndex}`,
             targetHandle: `input-${index}`,
             data: {
               label: input

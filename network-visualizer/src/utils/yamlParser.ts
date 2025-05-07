@@ -17,8 +17,8 @@ export const resolveConfigReferences = async (config: YamlConfig, basePath: stri
 
   // Process each module
   for (const [moduleName, moduleData] of Object.entries(config.modules)) {
-    // Skip entry and exit modules which have different structures
-    if (moduleName === 'entry' || moduleName === 'exit') {
+    // Skip input and output modules which have different structures
+    if (moduleName === 'input' || moduleName === 'output') {
       resolvedModules[moduleName] = moduleData;
       continue;
     }

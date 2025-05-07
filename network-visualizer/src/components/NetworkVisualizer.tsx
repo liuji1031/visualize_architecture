@@ -81,6 +81,7 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
   const [presets, setPresets] = useState<string[]>([]); // Available preset configurations
   const [isLoadingPresets, setIsLoadingPresets] = useState<boolean>(false); // Loading state for presets
   const [selectedPreset, setSelectedPreset] = useState<string>(""); // Selected preset
+  const [isGeneratingGraph, setIsGeneratingGraph] = useState<boolean>(false); // State for graph generation
   
   // Add triggerNodeId to track which node was clicked to navigate
   type GraphState = { nodes: Node[]; edges: Edge[]; config?: YamlConfig; triggerNodeId?: string }; 
@@ -150,8 +151,9 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
     config: YamlConfig,
     isInitialLoad: boolean = true,
     parentNodePosition?: XYPosition,
-    triggerNodeId?: string 
+    triggerNodeId?: string
   ) => {
+    setIsGeneratingGraph(true);
     try {
       setError(null);
       // No need to pass edgeType anymore
@@ -229,16 +231,24 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
       setError(`Error processing network structure: ${err.message}`);
       console.error('Error processing network structure:', err);
       return null;
+    } finally {
+      setIsGeneratingGraph(false);
     }
-  }, [reactFlowInstance, setNodes, setEdges, setHistoryStack, setCurrentGraphIndex, setSubgraphCache]);
+  }, [reactFlowInstance, setNodes, setEdges, setHistoryStack, setCurrentGraphIndex, setSubgraphCache, setIsGeneratingGraph]);
 
   useEffect(() => {
     if (yamlContent) {
+      setIsGeneratingGraph(true);
       parseYamlContent(yamlContent)
         .then(config => processConfig(config, true))
-        .catch((err: any) => { setError(`Error parsing YAML content: ${err.message}`); console.error('Error parsing YAML content:', err); });
+        .catch((err: any) => {
+          setError(`Error parsing YAML content: ${err.message}`);
+          console.error('Error parsing YAML content:', err);
+          setIsGeneratingGraph(false);
+        });
+      // processConfig will set isGeneratingGraph to false in its finally block
     }
-  }, [yamlContent, processConfig]);
+  }, [yamlContent, processConfig, setIsGeneratingGraph]);
 
   // Fetch available presets on component mount
   useEffect(() => {
@@ -280,26 +290,34 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
 
   useEffect(() => {
     if (yamlUrl) {
+      setIsGeneratingGraph(true);
       fetchYamlFile(yamlUrl)
         .then((config: YamlConfig) => processConfig(config, true))
-        .catch((err: any) => { setError(`Error fetching YAML from URL: ${err.message}`); console.error('Error fetching YAML from URL:', err); });
+        .catch((err: any) => {
+          setError(`Error fetching YAML from URL: ${err.message}`);
+          console.error('Error fetching YAML from URL:', err);
+          setIsGeneratingGraph(false);
+        });
+      // processConfig will set isGeneratingGraph to false in its finally block
     }
-  }, [yamlUrl, processConfig]);
+  }, [yamlUrl, processConfig, setIsGeneratingGraph]);
 
   // Updated uploadAndProcessFile to handle UploadResponse and pass edgeType correctly
   const uploadAndProcessFile = useCallback((file: File, isInitial: boolean = true) => {
     setFile(file);
+    setIsGeneratingGraph(true);
     uploadYamlFile(file)
       .then((response: UploadResponse) => {
         setCurrentUploadId(response.uploadId); // Store the upload ID
-        processConfig(response.config, isInitial); // Process the config
+        processConfig(response.config, isInitial); // processConfig will set isGeneratingGraph to false
       })
       .catch((err: any) => {
         setError(`Error processing YAML file: ${err.message}`);
         console.error('Error processing YAML file:', err);
         setCurrentUploadId(null); // Clear upload ID on error
+        setIsGeneratingGraph(false);
       });
-  }, [processConfig, setError, setFile, setCurrentUploadId]);
+  }, [processConfig, setError, setFile, setCurrentUploadId, setIsGeneratingGraph]);
 
   const calculateDynamicPadding = (nodeCount: number): number => {
     const basePadding = 0.2;
@@ -424,6 +442,7 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
     
     if (presetName) {
       setError(null);
+      setIsGeneratingGraph(true);
       console.log(`NetworkVisualizer: Starting to load preset: "${presetName}"`);
       
       // Clean up previous upload if any
@@ -437,7 +456,7 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
           .then((response: UploadResponse) => {
             console.log(`NetworkVisualizer: Successfully loaded preset "${presetName}" with upload ID: ${response.uploadId}`);
             setCurrentUploadId(response.uploadId);
-            processConfig(response.config, true);
+            processConfig(response.config, true); // processConfig will set isGeneratingGraph to false
             setFile(null); // Clear the file state since we're using a preset
           })
           .catch((err: any) => {
@@ -445,27 +464,33 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
             console.error(`NetworkVisualizer: ${errorMsg}`, err);
             setError(errorMsg);
             setCurrentUploadId(null);
+            setIsGeneratingGraph(false);
           });
       });
+    } else {
+      // If no preset is selected (e.g., "-- Select a configuration --"), ensure loading is false
+      setIsGeneratingGraph(false);
     }
-  }, [currentUploadId, processConfig, setError, setFile, setCurrentUploadId]);
+  }, [currentUploadId, processConfig, setError, setFile, setCurrentUploadId, setIsGeneratingGraph]);
 
   // Updated handleConfirmFolder to handle UploadResponse
   const handleConfirmFolder = useCallback(() => {
     setShowFolderDialog(false);
     if (zipFile && mainFile) {
+      setIsGeneratingGraph(true);
       uploadYamlFolder({ zipFile, mainFile })
         .then((response: UploadResponse) => {
           setCurrentUploadId(response.uploadId);
-          processConfig(response.config, true);
+          processConfig(response.config, true); // processConfig will set isGeneratingGraph to false
         })
         .catch((err: any) => {
           setError(`Error processing YAML folder: ${err.message}`);
           console.error('Error processing YAML folder:', err);
           setCurrentUploadId(null);
+          setIsGeneratingGraph(false);
         });
     }
-  }, [zipFile, mainFile, processConfig, setError, setShowFolderDialog, setCurrentUploadId]);
+  }, [zipFile, mainFile, processConfig, setError, setShowFolderDialog, setCurrentUploadId, setIsGeneratingGraph]);
 
   const handleCancelFolder = useCallback(() => {
     setShowFolderDialog(false);
@@ -685,10 +710,14 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
         
         // Determine background color based on node data
         let backgroundColor = '#f2c496'; // Default color
-        if (data.isEntry) {
-          backgroundColor = '#a2c3fa';
-        } else if (data.isExit) {
-          backgroundColor = '#ffc891';
+        let borderColor = '#949494'; // Default border color
+
+        if (data.isInput) {
+          backgroundColor = '#ffffff'; // White background for input
+          borderColor = '#000000'; // Black border for input
+        } else if (data.isOutput) {
+          backgroundColor = '#ffffff'; // White background for output
+          borderColor = '#000000'; // Black border for output
         } else if (data.cls === 'ComposableModel' && data.label) {
           // Generate color from label for ComposableModel
           const hash = Math.abs(data.label.split('').reduce((acc: number, char: string) => ((acc << 5) - acc) + char.charCodeAt(0), 0) & 0xFFFFFFFF);
@@ -711,7 +740,7 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
         
         // Generate input handles (at top of node)
         let inputHandles = '';
-        if (!data.isEntry && inputCount > 0) {
+        if (!data.isInput && inputCount > 0) {
           for (let i = 0; i < inputCount; i++) {
             let leftPosition;
             if (inputCount === 1) {
@@ -731,7 +760,7 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
         
         // Generate output handles (at bottom of node)
         let outputHandles = '';
-        if (!data.isExit && outputCount > 0) {
+        if (!data.isOutput && outputCount > 0) {
           for (let i = 0; i < outputCount; i++) {
             let leftPosition;
             if (outputCount === 1) {
@@ -749,15 +778,20 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
           }
         }
         
-        // Adjust text positioning to be above and below the middle line
+        // Adjust text positioning
         const middleY = height / 2;
-        const labelY = middleY - 2; // Just above the middle line
-        const classY = middleY + 12; // Just below the middle line
+        let labelY = middleY - 4; // Default for nodes with class info
+        const classY = middleY + 10; 
+
+        // For input/output nodes, center the label vertically as there's no class line
+        if (data.isInput || data.isOutput) {
+          labelY = middleY;
+        }
         
         return `<g transform="translate(${position.x},${position.y})">
-        <rect width="${width}" height="${height}" rx="5" ry="5" fill="${backgroundColor}" stroke="#949494" stroke-width="1"/>
-        <text x="${width/2}" y="${labelY}" text-anchor="middle" font-family="Arial, sans-serif" font-size="12px" font-weight="bold" fill="#000">${data.label || ''}</text>
-        ${data.cls ? `<text x="${width/2}" y="${classY}" text-anchor="middle" font-family="Arial, sans-serif" font-size="10px" fill="#000">${data.cls}</text>` : ''}
+        <rect width="${width}" height="${height}" rx="5" ry="5" fill="${backgroundColor}" stroke="${borderColor}" stroke-width="1"/>
+        <text x="${width/2}" y="${labelY}" text-anchor="middle" dominant-baseline="middle" font-family="Arial, sans-serif" font-size="12px" font-weight="bold" fill="#000">${data.label || ''}</text>
+        ${(data.cls && !data.isInput && !data.isOutput) ? `<text x="${width/2}" y="${classY}" text-anchor="middle" dominant-baseline="middle" font-family="Arial, sans-serif" font-size="10px" fill="#000">${data.cls}</text>` : ''}
         ${inputHandles}
         ${outputHandles}
       </g>`;
@@ -997,10 +1031,17 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
               </div>
             </Panel>
           )}
-          {showUI && error && (
+          {isGeneratingGraph && (
+            <Panel position="top-center">
+              <div style={{ padding: '10px', backgroundColor: 'rgba(138, 241, 134, 0.64)', borderRadius: '4px', border: '1px solid #bdbdbd', color: '#333' }}>
+                Generating graph, please wait...
+              </div>
+            </Panel>
+          )}
+          {showUI && error && !isGeneratingGraph && ( // Only show error if not currently generating
             <Panel position="top-center"><div style={{ padding: '10px', backgroundColor: '#f8d7da', color: '#721c24', borderRadius: '4px', border: '1px solid #f5c6cb' }}>{error}</div></Panel>
           )}
-          {showUI && file && (
+          {showUI && file && !isGeneratingGraph && ( // Only show file if not currently generating
             <Panel position="top-right"><div style={{ padding: '10px', backgroundColor: '#e2f3f5', borderRadius: '4px', border: '1px solid #90cdf4' }}><strong>Current File:</strong> {file.name}</div></Panel>
           )}
           {showFolderDialog && (

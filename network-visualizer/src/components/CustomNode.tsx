@@ -58,33 +58,39 @@ interface CustomNodeProps extends NodeProps<ModuleNodeData> {
 }
 
 const CustomNode: React.FC<CustomNodeProps> = ({ data, isConnectable, id, ...props }) => { // Destructure props to get onNodeDoubleClick
-  const { label, cls, isEntry, isExit, outNum = 1, config } = data;
+  const { label, cls, isInput, isOutput, outNum = 1, config } = data;
   // const [showTooltip, setShowTooltip] = useState(false); // Removed state
   const { onNodeDoubleClick } = props; // Get the callback from props
 
   // Get background color using the utility function
   const backgroundColor = getNodeBackgroundColor(data);
-  const borderColor = nodeTypeStyles.default.borderColor; // Assuming border color is consistent
+  let borderColor = nodeTypeStyles.default.borderColor; // Default border color
+
+  if (data.isInput) {
+    borderColor = nodeTypeStyles.input.borderColor;
+  } else if (data.isOutput) {
+    borderColor = nodeTypeStyles.output.borderColor;
+  }
   
   // Calculate the number of input and output handles
   let inputCount = 0;
   let outputCount = 0;
   
-  if (isEntry) {
-    // Entry node has no inputs, but has outputs based on inputSources
-    const entrySources = data.inputSources as string[] || [];
+  if (isInput) {
+    // Input node has no inputs, but has outputs based on inputSources
+    const inputSources = data.inputSources as string[] || [];
     inputCount = 0;
-    outputCount = entrySources.length;
-  } else if (isExit) {
-    // Exit node has inputs based on inputSources, but no outputs
+    outputCount = inputSources.length;
+  } else if (isOutput) {
+    // Output node has inputs based on inputSources, but no outputs
     if (Array.isArray(data.inputSources)) {
-      // Exit node has inputs as a list
-      const exitInputs = data.inputSources as string[] || [];
-      inputCount = exitInputs.length;
+      // Output node has inputs as a list
+      const outputInputs = data.inputSources as string[] || [];
+      inputCount = outputInputs.length;
     } else {
-      // Exit node has inputs as a dictionary
-      const exitInputs = data.inputSources as Record<string, string> || {};
-      inputCount = Object.keys(exitInputs).length;
+      // Output node has inputs as a dictionary
+      const outputInputs = data.inputSources as Record<string, string> || {};
+      inputCount = Object.keys(outputInputs).length;
     }
     outputCount = 0;
   } else {
@@ -113,31 +119,31 @@ const CustomNode: React.FC<CustomNodeProps> = ({ data, isConnectable, id, ...pro
   
   // Generate input handles
   const renderInputHandles = () => {
-    if (isEntry) {
-      // Entry node doesn't have input handles
+    if (isInput) {
+      // Input node doesn't have input handles
       return null;
     }
     
-    if (isExit) {
-      // Exit node can have inputs as either a list or a dictionary
+    if (isOutput) {
+      // Output node can have inputs as either a list or a dictionary
       let outputNames: string[] = [];
       let totalHandles = 0;
       
       let isList = false;
       if (Array.isArray(data.inputSources)) {
-        // Exit node has inputs as a list
-        const exitInputs = data.inputSources as string[];
-        totalHandles = exitInputs.length;
-        outputNames = exitInputs.map((_, index) => index.toString());
+        // Output node has inputs as a list
+        const outputInputs = data.inputSources as string[];
+        totalHandles = outputInputs.length;
+        outputNames = outputInputs.map((_, index) => index.toString());
         isList = true;
       } else {
-        // Exit node has inputs as a dictionary
-        const exitInputs = data.inputSources as Record<string, string>;
-        outputNames = Object.keys(exitInputs);
+        // Output node has inputs as a dictionary
+        const outputInputs = data.inputSources as Record<string, string>;
+        outputNames = Object.keys(outputInputs);
         totalHandles = outputNames.length;
       }
       
-      // Calculate handle positions for exit node (only horizontal needed now)
+      // Calculate handle positions for output node (only horizontal needed now)
       
       return (
         <>
@@ -230,15 +236,15 @@ const CustomNode: React.FC<CustomNodeProps> = ({ data, isConnectable, id, ...pro
   
   // Generate output handles
   const renderOutputHandles = () => {
-    if (isExit) {
-      // Exit node doesn't have output handles
+    if (isOutput) {
+      // Output node doesn't have output handles
       return null;
     }
     
-    if (isEntry) {
-      // Entry node has output handles based on its input sources
-      const entrySources = data.inputSources as string[] || [];
-      const outputCount = entrySources.length;
+    if (isInput) {
+      // Input node has output handles based on its input sources
+      const inputSources = data.inputSources as string[] || [];
+      const outputCount = inputSources.length;
       
       return Array.from({ length: outputCount }).map((_, index) => {
         // Calculate horizontal position for handles

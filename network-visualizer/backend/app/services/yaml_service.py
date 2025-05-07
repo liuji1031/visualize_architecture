@@ -104,7 +104,7 @@ def find_config_references(config: Dict[str, Any], base_path: str = '') -> List[
         return references
     modules = config['modules']
     for module_name, module_data in modules.items():
-        if module_name in ['entry', 'exit']: continue
+        if module_name in ['input', 'output']: continue
         if isinstance(module_data, dict) and 'config' in module_data and isinstance(module_data['config'], str):
             config_path_str = module_data['config']
             # This resolution logic is local-filesystem based
@@ -174,7 +174,7 @@ def resolve_config_references(config: Dict[str, Any], upload_id: Optional[str], 
     gcs_upload_prefix = f"uploads/{upload_id}/"
 
     for module_name, module_data in modules.items():
-        if module_name in ['entry', 'exit']: continue
+        if module_name in ['input', 'output']: continue
 
         if isinstance(module_data, dict) and 'config' in module_data and isinstance(module_data['config'], str):
             original_config_path_str = module_data['config'] # This is the relative path string from the YAML
