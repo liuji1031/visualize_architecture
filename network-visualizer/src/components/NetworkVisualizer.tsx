@@ -718,6 +718,9 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
         } else if (data.isOutput) {
           backgroundColor = '#ffffff'; // White background for output
           borderColor = '#000000'; // Black border for output
+        } else if (data.cls && typeof data.cls === 'string' && data.cls.toLowerCase().includes('conv')) {
+          backgroundColor = '#b3d0ff'; // User-specified bluish color for conv nodes
+          // borderColor will remain default or could be set specifically here if needed
         } else if (data.cls === 'ComposableModel' && data.label) {
           // Generate color from label for ComposableModel
           const hash = Math.abs(data.label.split('').reduce((acc: number, char: string) => ((acc << 5) - acc) + char.charCodeAt(0), 0) & 0xFFFFFFFF);

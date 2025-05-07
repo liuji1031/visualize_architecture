@@ -198,7 +198,7 @@ export const processNetworkStructure = (config: YamlConfig): NetworkStructure =>
  * @returns Tuple of [moduleName, outputIndex?]
  */
 const parseInputSource = (inputSource: string): [string, number | undefined] => {
-  const parts = inputSource.split(':');
+  const parts = inputSource.split('.'); // Changed delimiter from ':' to '.'
   
   if (parts.length === 1) {
     return [parts[0], undefined];

@@ -50,11 +50,16 @@ export const getNodeBackgroundColor = (nodeData: any): string => {
 
   if (isInput) return nodeTypeStyles.input.backgroundColor;
   if (isOutput) return nodeTypeStyles.output.backgroundColor;
+
+  // Check for 'conv' related classes
+  if (cls && typeof cls === 'string' && cls.toLowerCase().includes('conv')) {
+    return '#b3d0ff'; // Specified bluish color
+  }
   
   if (cls === 'ComposableModel' && label) {
     return generateColorFromString(label); // Use label for ComposableModel
   } else if (cls) {
-    return generateColorFromString(cls); // Use cls for other types
+    return generateColorFromString(cls); // Use cls for other types (that don't contain 'conv')
   }
   
   return nodeTypeStyles.default.backgroundColor; // Fallback to default
