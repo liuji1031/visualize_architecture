@@ -51,21 +51,19 @@ export const getNodeBackgroundColor = (nodeData: any): string => {
   if (isInput) return nodeTypeStyles.input.backgroundColor;
   if (isOutput) return nodeTypeStyles.output.backgroundColor;
 
+  // If cls field doesn't exist, use the module name (label) for color generation
+  if (cls === undefined) {
+    return label ? generateColorFromString(label) : nodeTypeStyles.default.backgroundColor;
+  }
+
   // Check for 'conv' related classes
-  if (cls && typeof cls === 'string' && cls.toLowerCase().includes('conv')) {
+  if (typeof cls === 'string' && cls.toLowerCase().includes('conv')) {
     return '#b3d0ff'; // Specified bluish color
   }
   
   if (cls === 'ComposableModel' && label) {
     return generateColorFromString(label); // Use label for ComposableModel
-  } else if (cls) {
+  } else {
     return generateColorFromString(cls); // Use cls for other types (that don't contain 'conv')
   }
-  
-  // If no cls field exists, use the module name (label) for color generation
-  if (label) {
-    return generateColorFromString(label);
-  }
-  
-  return nodeTypeStyles.default.backgroundColor; // Fallback to default only if no label exists
 };

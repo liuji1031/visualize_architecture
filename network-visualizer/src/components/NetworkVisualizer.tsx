@@ -575,32 +575,21 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
       // Define handle radius as a constant for consistent use
       const HANDLE_RADIUS = 4;
       
-      // Calculate the bounding box
-      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      // Get the bounding box using getNodesBounds
+      const bounds = getNodesBounds(flowNodes);
       
-      // Process nodes to find bounds
-      flowNodes.forEach(node => {
-        const x = node.position.x;
-        const y = node.position.y;
-        const width = node.width || 150; // Default width if not specified
-        const height = node.height || 40; // Default height if not specified
-        
-        minX = Math.min(minX, x);
-        minY = Math.min(minY, y);
-        maxX = Math.max(maxX, x + width);
-        maxY = Math.max(maxY, y + height);
-      });
+      // Add padding to create a padded bounding box
+      const padding = 0;
+      const paddedBounds = {
+        x: bounds.x - padding,
+        y: bounds.y - padding,
+        width: bounds.width + (padding * 2),
+        height: bounds.height + (padding * 2)
+      };
       
-      // Add padding
-      const padding = 30;
-      minX = Math.max(0, minX - padding);
-      minY = Math.max(0, minY - padding);
-      maxX = maxX + padding;
-      maxY = maxY + padding;
-      
-      // Calculate dimensions
-      const width = maxX - minX;
-      const height = maxY - minY;
+      // Use these values for both the SVG dimensions and viewBox
+      const width = paddedBounds.width;
+      const height = paddedBounds.height;
 
       const arrowWidth = 6;
       const arrowHeight = 8;
@@ -608,14 +597,14 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
       // Create SVG document with proper XML declaration
       const svgString = `<?xml version="1.0" encoding="UTF-8" standalone="no"?>
   <!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
-  <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="${minX} ${minY} ${width} ${height}">
+  <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="${paddedBounds.x} ${paddedBounds.y} ${paddedBounds.width} ${paddedBounds.height}">
     <defs>
       <!-- Define marker for arrow heads -->
       <marker id="arrowhead" markerWidth="${arrowWidth}" markerHeight="${arrowHeight}" refX="0" refY="${arrowHeight/2}" orient="auto">
         <polygon points="0 0, ${arrowWidth} ${arrowHeight/2}, 0 ${arrowHeight}" fill="#555" />
       </marker>
     </defs>
-    <rect x="${minX}" y="${minY}" width="${width}" height="${height}" fill="white"/>
+    <rect x="${paddedBounds.x}" y="${paddedBounds.y}" width="${paddedBounds.width}" height="${paddedBounds.height}" fill="white"/>
     <g class="edges">
       ${flowEdges.map(edge => {
         const sourceNode = flowNodes.find(n => n.id === edge.source);
