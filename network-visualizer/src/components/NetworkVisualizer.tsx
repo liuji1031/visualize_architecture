@@ -47,7 +47,7 @@ import {
   API_BASE_URL // Import API_BASE_URL
 } from '../services/api';
 import { processNetworkStructure, NODE_WIDTH, HORIZONTAL_SPACING } from '../utils/networkProcessor';
-import { getNodeBackgroundColor } from '../utils/colorUtils'; // Import color util
+import { getNodeBackgroundColor, nodeTypeStyles } from '../utils/colorUtils'; // Import color utils
 import CustomNode from './CustomNode';
 // import CustomEdge from './CustomEdge'; // No longer needed if using default types
 import ModifiedBezierEdge from './ModifiedBezierEdge'; // Import the new custom edge
@@ -708,33 +708,15 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
         const width = node.width || 150;
         const height = node.height || 40;
         
-        // Determine background color based on node data
-        let backgroundColor = '#f2c496'; // Default color
-        let borderColor = '#949494'; // Default border color
-
+        // Use the getNodeBackgroundColor function for consistent coloring
+        const backgroundColor = getNodeBackgroundColor(data);
+        
+        // Determine border color
+        let borderColor = nodeTypeStyles.default.borderColor;
         if (data.isInput) {
-          backgroundColor = '#ffffff'; // White background for input
-          borderColor = '#000000'; // Black border for input
+          borderColor = nodeTypeStyles.input.borderColor;
         } else if (data.isOutput) {
-          backgroundColor = '#ffffff'; // White background for output
-          borderColor = '#000000'; // Black border for output
-        } else if (data.cls && typeof data.cls === 'string' && data.cls.toLowerCase().includes('conv')) {
-          backgroundColor = '#b3d0ff'; // User-specified bluish color for conv nodes
-          // borderColor will remain default or could be set specifically here if needed
-        } else if (data.cls === 'ComposableModel' && data.label) {
-          // Generate color from label for ComposableModel
-          const hash = Math.abs(data.label.split('').reduce((acc: number, char: string) => ((acc << 5) - acc) + char.charCodeAt(0), 0) & 0xFFFFFFFF);
-          const hue = hash % 360;
-          const saturation = 50 + (hash % 20);
-          const lightness = 75 + (hash % 10);
-          backgroundColor = `hsl(${hue}, ${saturation}%, ${lightness}%)`;
-        } else if (data.cls) {
-          // Generate color from class name
-          const hash = Math.abs(data.cls.split('').reduce((acc: number, char: string) => ((acc << 5) - acc) + char.charCodeAt(0), 0) & 0xFFFFFFFF);
-          const hue = hash % 360;
-          const saturation = 50 + (hash % 20);
-          const lightness = 75 + (hash % 10);
-          backgroundColor = `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+          borderColor = nodeTypeStyles.output.borderColor;
         }
         
         // Calculate input and output handles

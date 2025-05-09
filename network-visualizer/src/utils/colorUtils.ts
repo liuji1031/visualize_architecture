@@ -62,5 +62,10 @@ export const getNodeBackgroundColor = (nodeData: any): string => {
     return generateColorFromString(cls); // Use cls for other types (that don't contain 'conv')
   }
   
-  return nodeTypeStyles.default.backgroundColor; // Fallback to default
+  // If no cls field exists, use the module name (label) for color generation
+  if (label) {
+    return generateColorFromString(label);
+  }
+  
+  return nodeTypeStyles.default.backgroundColor; // Fallback to default only if no label exists
 };
