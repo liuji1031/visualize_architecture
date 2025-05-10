@@ -680,12 +680,33 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
         // Create path for edge - stopping ABOVE the handle circle
         const path = `M${sourceHandleX},${sourceHandleY} C${sourceControlX},${sourceControlY} ${targetControlX},${targetControlY} ${targetHandleX},${targetHandleY}`;
         
-        // Add edge label if available
+        // Add edge label if available and edge labels are enabled
         let labelElement = '';
-        if (edge.label) {
+        if (showEdgeLabels && edge.data?.label) {
+          // Calculate true midpoint
           const labelX = (sourceHandleX + targetHandleX) / 2;
-          const labelY = (sourceHandleY + targetHandleY) / 2 - 10;
-          labelElement = `<text x="${labelX}" y="${labelY}" text-anchor="middle" dominant-baseline="middle" font-family="Arial, sans-serif" font-size="10px" fill="#555" style="background-color: white; padding: 2px;">${edge.label}</text>`;
+          const labelY = (sourceHandleY + targetHandleY) / 2;
+
+          // Estimate text width (approx. 7px per character for 10px font, plus padding)
+          const labelText = String(edge.data.label);
+          const fontSize = 10;
+          const charWidth = 7;
+          const paddingX = 0;
+          const paddingY = 2;
+          const textWidth = labelText.length * charWidth;
+          const rectWidth = textWidth + paddingX * 2;
+          const rectHeight = fontSize + paddingY * 2;
+          const rectX = labelX - rectWidth / 2;
+          const rectY = labelY - rectHeight / 2;
+
+          labelElement = `
+            <g>
+              <rect x="${rectX}" y="${rectY}" width="${rectWidth}" height="${rectHeight}" rx="3" ry="3"
+                fill="white" stroke="#cfcfcf" stroke-width="1"/>
+              <text x="${labelX}" y="${labelY + fontSize/2 - 5 }" text-anchor="middle" dominant-baseline="middle"
+                font-family="Arial, sans-serif" font-size="${fontSize}px" fill="#000" font-weight="500">${labelText}</text>
+            </g>
+          `;
         }
         
         return `<path d="${path}" stroke="#555" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)"/>${labelElement}`;
@@ -791,7 +812,7 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
       console.error('Error in SVG export function:', error);
       setError(`Failed to export SVG: ${error instanceof Error ? error.message : String(error)}`);
     }
-  }, [reactFlowInstance, setError]);
+  }, [reactFlowInstance, setError, showEdgeLabels]);
 
   // Refactor the export functionality into a reusable function
   const exportImage = useCallback((format: 'png' | 'svg') => {
