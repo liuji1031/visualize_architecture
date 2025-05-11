@@ -1,6 +1,7 @@
 import React, { useContext } from 'react';
 import { EdgeProps, getBezierPath, Position, EdgeLabelRenderer } from 'reactflow';
 import { EdgeLabelContext } from './NetworkVisualizer'; // Import the context
+import { cubicBezierPoint } from '../utils/networkProcessor';
 
 // Function to calculate modified Bezier path for vertical layout
 const getModifiedBezierPath = (
@@ -62,10 +63,29 @@ const ModifiedBezierEdge: React.FC<EdgeProps> = ({
     targetPosition
   );
 
-  // Calculate the center point of the path for label positioning
-  // For a cubic bezier curve, a simple approximation is to take the midpoint
-  const labelX = (sourceX + targetX) / 2;
-  const labelY = (sourceY + targetY) / 2;
+  // Calculate the label position along the curve near the target handle, with a y-offset
+  const verticalOffset = Math.min(200, Math.max(30, Math.abs(targetY - sourceY) * 0.9));
+  let sourceControlY = sourceY + verticalOffset;
+  let targetControlY = targetY - verticalOffset;
+  if (sourceY > targetY) {
+    sourceControlY = sourceY - verticalOffset;
+    targetControlY = targetY + verticalOffset;
+  }
+  const sourceControlX = sourceX;
+  const targetControlX = targetX;
+
+  // Use t near 1 to get a point close to the target handle
+  const t = 0.92;
+  const labelPoint = cubicBezierPoint(
+    { x: sourceX, y: sourceY },
+    { x: sourceControlX, y: sourceControlY },
+    { x: targetControlX, y: targetControlY },
+    { x: targetX, y: targetY },
+    t
+  );
+  const LABEL_Y_OFFSET = 22;
+  const labelX = labelPoint.x;
+  const labelY = targetY - LABEL_Y_OFFSET;
 
   // Label styles
   const labelStyle: React.CSSProperties = {

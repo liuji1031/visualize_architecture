@@ -185,12 +185,41 @@ export const processNetworkStructure = (config: YamlConfig): NetworkStructure =>
   
   // Apply layout algorithm
   const { nodes: positionedNodes } = applyLayout({ nodes, edges });
-  
+
   return {
     nodes: positionedNodes,
     edges
   };
 };
+
+/**
+ * Compute a point on a cubic Bezier curve at parameter t (0 <= t <= 1)
+ * @param p0 - Start point {x, y}
+ * @param p1 - First control point {x, y}
+ * @param p2 - Second control point {x, y}
+ * @param p3 - End point {x, y}
+ * @param t - Parameter (0=start, 1=end)
+ * @returns {x, y} point on the curve
+ */
+export function cubicBezierPoint(
+  p0: { x: number; y: number },
+  p1: { x: number; y: number },
+  p2: { x: number; y: number },
+  p3: { x: number; y: number },
+  t: number
+): { x: number; y: number } {
+  const x =
+    Math.pow(1 - t, 3) * p0.x +
+    3 * Math.pow(1 - t, 2) * t * p1.x +
+    3 * (1 - t) * Math.pow(t, 2) * p2.x +
+    Math.pow(t, 3) * p3.x;
+  const y =
+    Math.pow(1 - t, 3) * p0.y +
+    3 * Math.pow(1 - t, 2) * t * p1.y +
+    3 * (1 - t) * Math.pow(t, 2) * p2.y +
+    Math.pow(t, 3) * p3.y;
+  return { x, y };
+}
 
 /**
  * Parse an input source string into module name and output index

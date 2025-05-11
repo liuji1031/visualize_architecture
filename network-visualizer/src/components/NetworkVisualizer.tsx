@@ -609,24 +609,21 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
       ${flowEdges.map(edge => {
         const sourceNode = flowNodes.find(n => n.id === edge.source);
         const targetNode = flowNodes.find(n => n.id === edge.target);
-        
         if (!sourceNode || !targetNode) return '';
-        
         // Get source and target handle information
         const sourceHandleId = edge.sourceHandle || 'output-0';
         const targetHandleId = edge.targetHandle || 'input-0';
-        
         // Parse handle indices
         const sourceHandleIndex = parseInt(sourceHandleId.split('-')[1]) || 0;
         const targetHandleIndex = parseInt(targetHandleId.split('-')[1]) || 0;
-        
         // Calculate source handle position
         const sourceWidth = sourceNode.width || 150;
         const sourceHeight = sourceNode.height || 40;
         let sourceHandleX;
-        
-        // Calculate output handle positions based on number of outputs
-        const sourceOutputCount = sourceNode.data.outNum || 1;
+        let sourceOutputCount = sourceNode.data.outNum || 1;
+        if (sourceNode.data.isInput && Array.isArray(sourceNode.data.inputSources)) {
+          sourceOutputCount = sourceNode.data.inputSources.length;
+        }
         if (sourceOutputCount === 1) {
           sourceHandleX = sourceNode.position.x + sourceWidth / 2;
         } else {
@@ -637,19 +634,15 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
           sourceHandleX = sourceNode.position.x + leftPadding + sourceHandleIndex * step;
         }
         const sourceHandleY = sourceNode.position.y + sourceHeight;
-        
         // Calculate target handle position
         const targetWidth = targetNode.width || 150;
         const targetHeight = targetNode.height || 40;
         let targetHandleX;
-        
-        // Calculate input handle positions based on number of inputs
-        const targetInputCount = targetNode.data.inputSources ? 
-          (Array.isArray(targetNode.data.inputSources) ? 
-            targetNode.data.inputSources.length : 
-            Object.keys(targetNode.data.inputSources).length) : 
+        const targetInputCount = targetNode.data.inputSources ?
+          (Array.isArray(targetNode.data.inputSources) ?
+            targetNode.data.inputSources.length :
+            Object.keys(targetNode.data.inputSources).length) :
           0;
-        
         if (targetInputCount === 1) {
           targetHandleX = targetNode.position.x + targetWidth / 2;
         } else {
@@ -659,57 +652,109 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
           const step = availableWidth / (targetInputCount - 1);
           targetHandleX = targetNode.position.x + leftPadding + targetHandleIndex * step;
         }
-        
-        // Position the target point ABOVE the handle circle
-        // This is the key change - we stop the path HANDLE_RADIUS * 2 pixels above the node
         const targetHandleY = targetNode.position.y - HANDLE_RADIUS * 2 - arrowWidth;
-        
         // Calculate control points for bezier curve
         const verticalOffset = Math.min(200, Math.max(30, Math.abs(targetHandleY - sourceHandleY) * 0.9));
         let sourceControlY = sourceHandleY + verticalOffset;
         let targetControlY = targetHandleY - verticalOffset;
-        
         if (sourceHandleY > targetHandleY) {
           sourceControlY = sourceHandleY - verticalOffset;
           targetControlY = targetHandleY + verticalOffset;
         }
-        
         const sourceControlX = sourceHandleX;
         const targetControlX = targetHandleX;
-        
         // Create path for edge - stopping ABOVE the handle circle
         const path = `M${sourceHandleX},${sourceHandleY} C${sourceControlX},${sourceControlY} ${targetControlX},${targetControlY} ${targetHandleX},${targetHandleY}`;
-        
-        // Add edge label if available and edge labels are enabled
+        return `<path d="${path}" stroke="#555" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)"/>`;
+      }).join('\n    ')}
+    </g>
+    <g class="edge-labels">
+      ${flowEdges.map(edge => {
+        const sourceNode = flowNodes.find(n => n.id === edge.source);
+        const targetNode = flowNodes.find(n => n.id === edge.target);
+        if (!sourceNode || !targetNode) return '';
+        const sourceHandleId = edge.sourceHandle || 'output-0';
+        const targetHandleId = edge.targetHandle || 'input-0';
+        const sourceHandleIndex = parseInt(sourceHandleId.split('-')[1]) || 0;
+        const targetHandleIndex = parseInt(targetHandleId.split('-')[1]) || 0;
+        const sourceWidth = sourceNode.width || 150;
+        const sourceHeight = sourceNode.height || 40;
+        let sourceHandleX;
+        let sourceOutputCount = sourceNode.data.outNum || 1;
+        if (sourceNode.data.isInput && Array.isArray(sourceNode.data.inputSources)) {
+          sourceOutputCount = sourceNode.data.inputSources.length;
+        }
+        if (sourceOutputCount === 1) {
+          sourceHandleX = sourceNode.position.x + sourceWidth / 2;
+        } else {
+          const leftPadding = 20;
+          const rightPadding = 20;
+          const availableWidth = sourceWidth - leftPadding - rightPadding;
+          const step = availableWidth / (sourceOutputCount - 1);
+          sourceHandleX = sourceNode.position.x + leftPadding + sourceHandleIndex * step;
+        }
+        const sourceHandleY = sourceNode.position.y + sourceHeight;
+        const targetWidth = targetNode.width || 150;
+        const targetHeight = targetNode.height || 40;
+        let targetHandleX;
+        const targetInputCount = targetNode.data.inputSources ?
+          (Array.isArray(targetNode.data.inputSources) ?
+            targetNode.data.inputSources.length :
+            Object.keys(targetNode.data.inputSources).length) :
+          0;
+        if (targetInputCount === 1) {
+          targetHandleX = targetNode.position.x + targetWidth / 2;
+        } else {
+          const leftPadding = 20;
+          const rightPadding = 20;
+          const availableWidth = targetWidth - leftPadding - rightPadding;
+          const step = availableWidth / (targetInputCount - 1);
+          targetHandleX = targetNode.position.x + leftPadding + targetHandleIndex * step;
+        }
+        const targetHandleY = targetNode.position.y - HANDLE_RADIUS * 2 - arrowWidth;
+        const verticalOffset = Math.min(200, Math.max(30, Math.abs(targetHandleY - sourceHandleY) * 0.9));
+        let sourceControlY = sourceHandleY + verticalOffset;
+        let targetControlY = targetHandleY - verticalOffset;
+        if (sourceHandleY > targetHandleY) {
+          sourceControlY = sourceHandleY - verticalOffset;
+          targetControlY = targetHandleY + verticalOffset;
+        }
+        const sourceControlX = sourceHandleX;
+        const targetControlX = targetHandleX;
         let labelElement = '';
         if (showEdgeLabels && edge.data?.label) {
-          // Calculate true midpoint
-          const labelX = (sourceHandleX + targetHandleX) / 2;
-          const labelY = (sourceHandleY + targetHandleY) / 2;
-
-          // Estimate text width (approx. 7px per character for 10px font, plus padding)
+          const t = 0.92;
+          const cubicBezierPoint = require('../utils/networkProcessor').cubicBezierPoint;
+          const labelPoint = cubicBezierPoint(
+            { x: sourceHandleX, y: sourceHandleY },
+            { x: sourceControlX, y: sourceControlY },
+            { x: targetControlX, y: targetControlY },
+            { x: targetHandleX, y: targetHandleY },
+            t
+          );
+          const LABEL_Y_OFFSET = 16;
+          const labelX = labelPoint.x;
+          const labelY = targetHandleY - LABEL_Y_OFFSET;
           const labelText = String(edge.data.label);
           const fontSize = 10;
           const charWidth = 7;
           const paddingX = 0;
-          const paddingY = 2;
+          const paddingY = 4;
           const textWidth = labelText.length * charWidth;
           const rectWidth = textWidth + paddingX * 2;
           const rectHeight = fontSize + paddingY * 2;
           const rectX = labelX - rectWidth / 2;
           const rectY = labelY - rectHeight / 2;
-
           labelElement = `
             <g>
-              <rect x="${rectX}" y="${rectY}" width="${rectWidth}" height="${rectHeight}" rx="3" ry="3"
-                fill="white" stroke="#cfcfcf" stroke-width="1"/>
-              <text x="${labelX}" y="${labelY + fontSize/2 - 5 }" text-anchor="middle" dominant-baseline="middle"
+              <rect x="${rectX}" y="${rectY}" width="${rectWidth}" height="${rectHeight}" rx="6" ry="6"
+                fill="white" stroke="#c9c9c9" stroke-width="0.5"/>
+              <text x="${labelX}" y="${labelY + fontSize/2-4}" text-anchor="middle" dominant-baseline="middle"
                 font-family="Arial, sans-serif" font-size="${fontSize}px" fill="#000" font-weight="500">${labelText}</text>
             </g>
           `;
         }
-        
-        return `<path d="${path}" stroke="#555" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)"/>${labelElement}`;
+        return labelElement;
       }).join('\n    ')}
     </g>
     <g class="nodes">
@@ -755,19 +800,23 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
         
         // Generate output handles (at bottom of node)
         let outputHandles = '';
-        if (!data.isOutput && outputCount > 0) {
-          for (let i = 0; i < outputCount; i++) {
+        // For the "input" node, use the number of outputs = number of inputSources (array length)
+        let actualOutputCount = outputCount;
+        if (data.isInput && Array.isArray(data.inputSources)) {
+          actualOutputCount = data.inputSources.length;
+        }
+        if (!data.isOutput && actualOutputCount > 0) {
+          for (let i = 0; i < actualOutputCount; i++) {
             let leftPosition;
-            if (outputCount === 1) {
+            if (actualOutputCount === 1) {
               leftPosition = width / 2; // Center if only one handle
             } else {
               const leftPadding = 20; // 20px from left
               const rightPadding = 20; // 20px from right
               const availableWidth = width - leftPadding - rightPadding;
-              const step = availableWidth / (outputCount - 1);
+              const step = availableWidth / (actualOutputCount - 1);
               leftPosition = leftPadding + i * step;
             }
-            
             // Smaller handle with white border - using the defined handle radius
             outputHandles += `<circle cx="${leftPosition}" cy="${height}" r="${HANDLE_RADIUS}" fill="#555" stroke="white" stroke-width="1" />`;
           }
@@ -775,14 +824,20 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
         
         // Adjust text positioning
         const middleY = height / 2;
-        let labelY = middleY - 4; // Default for nodes with class info
-        const classY = middleY + 10; 
+        let labelY;
+        const classY = middleY + 10;
 
-        // For input/output nodes, center the label vertically as there's no class line
         if (data.isInput || data.isOutput) {
+          // For input/output nodes, center the label vertically
           labelY = middleY;
+        } else if (!data.cls) {
+          // No class: center the label vertically
+          labelY = middleY;
+        } else {
+          // Has class: offset label and show class below
+          labelY = middleY - 4;
         }
-        
+
         return `<g transform="translate(${position.x},${position.y})">
         <rect width="${width}" height="${height}" rx="5" ry="5" fill="${backgroundColor}" stroke="${borderColor}" stroke-width="1"/>
         <text x="${width/2}" y="${labelY}" text-anchor="middle" dominant-baseline="middle" font-family="Arial, sans-serif" font-size="12px" font-weight="bold" fill="#000">${data.label || ''}</text>
