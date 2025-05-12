@@ -11,12 +11,24 @@ function App() {
         height: '100vh', 
         width: '100vw' 
       }}>
-        <header style={{ 
-          padding: '1rem', 
-          backgroundColor: '#f8f9fa', 
-          borderBottom: '1px solid #dee2e6' 
-        }}>
+        <header className="app-header">
           <h1 style={{ margin: 0, fontSize: '1.5rem' }}>Neural Network Architecture Visualizer</h1>
+          <div className="header-links">
+            <a
+              href="https://liuji1031.github.io/model_composer_mkdocs/"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Documentation
+            </a>
+            <a
+              href="https://github.com/liuji1031/model_composer"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              GitHub
+            </a>
+          </div>
         </header>
         
         <main style={{ flex: 1, position: 'relative' }}>

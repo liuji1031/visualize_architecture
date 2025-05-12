@@ -16,6 +16,34 @@ body {
   text-align: left;
 }
 
+.app-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem;
+  background-color: #f8f9fa;
+  border-bottom: 1px solid #dee2e6;
+}
+
+.header-links {
+  display: flex;
+  align-items: center;
+}
+
+.header-links a {
+  margin-left: 1.2rem;
+  color: #0366d6;
+  text-decoration: none;
+  font-weight: 500;
+  font-size: 1.25rem;
+  transition: color 0.2s;
+}
+
+.header-links a:hover {
+  color: #0056b3;
+  text-decoration: underline;
+}
+
 /* ReactFlow custom styles */
 /* Force removal of border/background from the outer node wrapper */
 .react-flow__node {
