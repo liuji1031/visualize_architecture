@@ -139,3 +139,22 @@ button:hover {
 button:active {
   transform: translateY(1px);
 }
+
+.composable-animate {
+  animation: composable-pulse 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  z-index: 10;
+}
+@keyframes composable-pulse {
+  0% {
+    box-shadow: 0 0 0 0 #4a90e2;
+    transform: scale(1);
+  }
+  50% {
+    box-shadow: 0 0 16px 8px #4a90e2;
+    transform: scale(1.08);
+  }
+  100% {
+    box-shadow: 0 0 0 0 #4a90e2;
+    transform: scale(1);
+  }
+}

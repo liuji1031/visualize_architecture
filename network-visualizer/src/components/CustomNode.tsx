@@ -60,6 +60,7 @@ interface CustomNodeProps extends NodeProps<ModuleNodeData> {
 const CustomNode: React.FC<CustomNodeProps> = ({ data, isConnectable, id, ...props }) => { // Destructure props to get onNodeDoubleClick
   const { label, cls, isInput, isOutput, outNum = 1, config } = data;
   // const [showTooltip, setShowTooltip] = useState(false); // Removed state
+  const [isAnimating, setIsAnimating] = useState(false);
   const { onNodeDoubleClick } = props; // Get the callback from props
 
   // Get background color using the utility function
@@ -354,6 +355,10 @@ const CustomNode: React.FC<CustomNodeProps> = ({ data, isConnectable, id, ...pro
 
   // Handle double click for ComposableModel nodes with config paths
   const handleDoubleClick = useCallback(() => {
+    if (cls === 'ComposableModel') {
+      setIsAnimating(true);
+      setTimeout(() => setIsAnimating(false), 400);
+    }
     if (onNodeDoubleClick && cls === 'ComposableModel' && typeof config === 'string') {
       onNodeDoubleClick(id, config, label);
     }
@@ -365,8 +370,7 @@ const CustomNode: React.FC<CustomNodeProps> = ({ data, isConnectable, id, ...pro
   return (
     <div 
       style={style}
-      // onMouseEnter={() => setShowTooltip(true)} // Removed handler
-      // onMouseLeave={() => setShowTooltip(false)} // Removed handler
+      className={isAnimating && cls === 'ComposableModel' ? 'composable-animate' : undefined}
       onDoubleClick={handleDoubleClick} // Add double click handler
       data-testid={`node-${id}`}
       data-tooltip-id="node-tooltip" // Added for react-tooltip
