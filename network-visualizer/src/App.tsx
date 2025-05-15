@@ -1,8 +1,14 @@
-import React from 'react';
+import React, { useState, useCallback } from 'react'; // Added useState, useCallback
 import './App.css';
 import NetworkVisualizer from './components/NetworkVisualizer';
 
 function App() {
+  const [currentModelPath, setCurrentModelPath] = useState<string>('');
+
+  const handleModelPathChange = useCallback((newPath: string) => {
+    setCurrentModelPath(newPath);
+  }, []);
+
   return (
     <div className="App">
       <div style={{ 
@@ -12,7 +18,12 @@ function App() {
         width: '100vw' 
       }}>
         <header className="app-header">
-          <h1 style={{ margin: 0, fontSize: '1.5rem' }}>Neural Network Architecture Visualizer</h1>
+          <h1 style={{ margin: 0, fontSize: '1.5rem', marginRight: 'auto' }}>Neural Network Architecture Visualizer</h1>
+          {currentModelPath && (
+            <div className="model-path-display">
+              model: {currentModelPath}
+            </div>
+          )}
           <div className="header-links">
             <a
               href="https://liuji1031.github.io/model_composer_mkdocs/"
@@ -32,7 +43,10 @@ function App() {
         </header>
         
         <main style={{ flex: 1, position: 'relative' }}>
-          <NetworkVisualizer />
+          <NetworkVisualizer
+            currentModelPath={currentModelPath}
+            onModelPathChange={handleModelPathChange}
+          />
         </main>
       </div>
     </div>

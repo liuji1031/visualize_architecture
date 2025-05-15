@@ -58,13 +58,20 @@ export const EdgeLabelContext = createContext<boolean>(true);
 interface NetworkVisualizerProps {
   yamlContent?: string;
   yamlUrl?: string;
+  currentModelPath: string; // Added
+  onModelPathChange: (newPath: string) => void; // Added
 }
 
 // Define zoom constraints as constants
 const MIN_ZOOM_LEVEL = 0.25;
 const MAX_ZOOM_LEVEL = 1.0;
 
-const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yamlUrl }) => {
+const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ 
+  yamlContent, 
+  yamlUrl, 
+  currentModelPath, // Destructure here
+  onModelPathChange // Destructure here
+}) => {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [error, setError] = useState<string | null>(null);
@@ -83,8 +90,8 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
   const [selectedPreset, setSelectedPreset] = useState<string>(""); // Selected preset
   const [isGeneratingGraph, setIsGeneratingGraph] = useState<boolean>(false); // State for graph generation
   
-  // Add triggerNodeId to track which node was clicked to navigate
-  type GraphState = { nodes: Node[]; edges: Edge[]; config?: YamlConfig; triggerNodeId?: string }; 
+  // Add triggerNodeId and fullPath to track which node was clicked and the model path
+  type GraphState = { nodes: Node[]; edges: Edge[]; config?: YamlConfig; triggerNodeId?: string; fullPath?: string }; 
   const [historyStack, setHistoryStack] = useState<GraphState[]>([]);
   const [currentGraphIndex, setCurrentGraphIndex] = useState<number>(-1);
   const [subgraphCache, setSubgraphCache] = useState<Record<string, GraphState>>({});
@@ -149,6 +156,7 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
   // Add triggerNodeId parameter
   const processConfig = useCallback((
     config: YamlConfig,
+    initialModelName: string, // Added to pass the determined model name
     isInitialLoad: boolean = true,
     parentNodePosition?: XYPosition,
     triggerNodeId?: string
@@ -167,15 +175,21 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
         newNodes = newNodes.map(node => ({ ...node, hidden: false }));
         newEdges = newEdges.map(edge => ({ ...edge, hidden: false }));
       }
-      // Assign triggerNodeId to the state if provided
-      const newGraphState: GraphState = { nodes: newNodes, edges: newEdges, config, triggerNodeId }; 
-      if (isInitialLoad) {
-        setHistoryStack([newGraphState]);
-        setCurrentGraphIndex(0);
-        setSubgraphCache({});
-        setNodes(newNodes);
-        setEdges(newEdges);
-        // Implement single-step initial view logic
+  // Assign triggerNodeId and fullPath to the state if provided
+  let newGraphState: GraphState = { nodes: newNodes, edges: newEdges, config, triggerNodeId };
+  
+  if (isInitialLoad) {
+    // initialModelName is now passed in, use it directly for fullPath
+    newGraphState = { ...newGraphState, fullPath: initialModelName };
+    // onModelPathChange is called by the initiator of the load (e.g., handleFileChange)
+    // So, no need to call onModelPathChange(initialModelName) here again.
+
+    setHistoryStack([newGraphState]);
+    setCurrentGraphIndex(0);
+    setSubgraphCache({});
+    setNodes(newNodes);
+    setEdges(newEdges);
+    // Implement single-step initial view logic
         setTimeout(() => {
           if (reactFlowInstance && reactFlowWrapper.current && newNodes.length > 0) {
             const padding = 0.2; // Same padding as fitView uses
@@ -239,8 +253,10 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
   useEffect(() => {
     if (yamlContent) {
       setIsGeneratingGraph(true);
+      const modelName = "Loaded Model"; // Generic name for direct content
+      onModelPathChange(modelName);
       parseYamlContent(yamlContent)
-        .then(config => processConfig(config, true))
+        .then(config => processConfig(config, modelName, true))
         .catch((err: any) => {
           setError(`Error parsing YAML content: ${err.message}`);
           console.error('Error parsing YAML content:', err);
@@ -291,8 +307,10 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
   useEffect(() => {
     if (yamlUrl) {
       setIsGeneratingGraph(true);
+      const baseName = yamlUrl.substring(yamlUrl.lastIndexOf('/') + 1).replace(/\.(yaml|yml)$/i, '') || "URL Model";
+      onModelPathChange(baseName);
       fetchYamlFile(yamlUrl)
-        .then((config: YamlConfig) => processConfig(config, true))
+        .then((config: YamlConfig) => processConfig(config, baseName, true))
         .catch((err: any) => {
           setError(`Error fetching YAML from URL: ${err.message}`);
           console.error('Error fetching YAML from URL:', err);
@@ -303,13 +321,16 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
   }, [yamlUrl, processConfig, setIsGeneratingGraph]);
 
   // Updated uploadAndProcessFile to handle UploadResponse and pass edgeType correctly
-  const uploadAndProcessFile = useCallback((file: File, isInitial: boolean = true) => {
-    setFile(file);
+  const uploadAndProcessFile = useCallback((fileToUpload: File, isInitial: boolean = true) => {
+    setFile(fileToUpload); // Use a different name to avoid conflict with 'file' state
     setIsGeneratingGraph(true);
-    uploadYamlFile(file)
+    const baseName = fileToUpload.name.replace(/\.(yaml|yml)$/i, '');
+    if(isInitial) onModelPathChange(baseName);
+
+    uploadYamlFile(fileToUpload)
       .then((response: UploadResponse) => {
         setCurrentUploadId(response.uploadId); // Store the upload ID
-        processConfig(response.config, isInitial); // processConfig will set isGeneratingGraph to false
+        processConfig(response.config, baseName, isInitial); // Pass baseName
       })
       .catch((err: any) => {
         setError(`Error processing YAML file: ${err.message}`);
@@ -345,18 +366,30 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
     await new Promise(resolve => setTimeout(resolve, 200));
     try {
       const subgraphConfig = await getSubgraphConfig(currentUploadId, configPath, nodeModuleName); // Pass currentUploadId
-      // Simplified logic - always process subgraph, don't rely on cache across uploads
-      // Pass the parentNodeId as the triggerNodeId for the new state
-      const newlyGeneratedState = processConfig(subgraphConfig, false, parentNode.position, nodeId); 
+      
+      // For subgraphs, the 'initialModelName' for processConfig isn't strictly the root, 
+      // but it's used to set fullPath if it were an initial load (which it isn't here).
+      // The actual newFullPath is constructed below.
+      const tempModelNameForProcessConfig = nodeModuleName; // Or parentNode.data.label
+      const newlyGeneratedState = processConfig(subgraphConfig, tempModelNameForProcessConfig, false, parentNode.position, nodeId); 
+
       if (newlyGeneratedState) {
-        const newStack = [...historyStack.slice(0, currentGraphIndex + 1), newlyGeneratedState];
+        let newFullPath = currentModelPath; 
+        if (moduleName) { 
+          newFullPath = `${currentModelPath}/${moduleName}`;
+          onModelPathChange(newFullPath); 
+        }
+        
+        // Ensure the fullPath in the new state reflects the navigation
+        const stateWithFullPath = { ...newlyGeneratedState, fullPath: newFullPath }; 
+        const newStack = [...historyStack.slice(0, currentGraphIndex + 1), stateWithFullPath];
         setHistoryStack(newStack);
         const newIndex = newStack.length - 1;
         setCurrentGraphIndex(newIndex);
-        setNodes(newlyGeneratedState.nodes);
-        setEdges(newlyGeneratedState.edges);
+        setNodes(stateWithFullPath.nodes); // Use nodes from stateWithFullPath
+        setEdges(stateWithFullPath.edges); // Use edges from stateWithFullPath
         setTimeout(() => {
-          const nodeCount = newlyGeneratedState.nodes.length;
+          const nodeCount = stateWithFullPath.nodes.length;
           const padding = calculateDynamicPadding(nodeCount);
           const duration = calculateTransitionDuration(nodeCount);
           reactFlowInstance.fitView({ nodes: newlyGeneratedState.nodes.map(n => ({ id: n.id })), padding: padding, duration: duration });
@@ -380,8 +413,9 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
       setTimeout(() => { if (parentNode) reactFlowInstance.fitView({ nodes: [{ id: nodeId }], padding: 0.3, duration: 500 }); }, 300);
     }
   }, [
-    reactFlowInstance, processConfig, currentUploadId, // Added currentUploadId
-    historyStack, currentGraphIndex, setHistoryStack, setCurrentGraphIndex, setNodes, setEdges, setError
+    reactFlowInstance, processConfig, currentUploadId,
+    historyStack, currentGraphIndex, setHistoryStack, setCurrentGraphIndex, setNodes, setEdges, setError,
+    currentModelPath, onModelPathChange // Added props dependencies
   ]);
 
   // Updated handleFileChange to include cleanup
@@ -456,7 +490,8 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
           .then((response: UploadResponse) => {
             console.log(`NetworkVisualizer: Successfully loaded preset "${presetName}" with upload ID: ${response.uploadId}`);
             setCurrentUploadId(response.uploadId);
-            processConfig(response.config, true); // processConfig will set isGeneratingGraph to false
+            onModelPathChange(presetName); // Set path for preset
+            processConfig(response.config, presetName, true); // Pass presetName
             setFile(null); // Clear the file state since we're using a preset
           })
           .catch((err: any) => {
@@ -478,10 +513,13 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
     setShowFolderDialog(false);
     if (zipFile && mainFile) {
       setIsGeneratingGraph(true);
+      const baseName = mainFile.substring(mainFile.lastIndexOf('/') + 1).replace(/\.(yaml|yml)$/i, '');
+      onModelPathChange(baseName);
+
       uploadYamlFolder({ zipFile, mainFile })
         .then((response: UploadResponse) => {
           setCurrentUploadId(response.uploadId);
-          processConfig(response.config, true); // processConfig will set isGeneratingGraph to false
+          processConfig(response.config, baseName, true); // Pass baseName
         })
         .catch((err: any) => {
           setError(`Error processing YAML folder: ${err.message}`);
@@ -518,8 +556,8 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
 
   const handleGoBack = useCallback(() => {
     if (currentGraphIndex > 0) {
-      const currentState = historyStack[currentGraphIndex]; // Get the state we are navigating *from*
-      const triggerNodeId = currentState.triggerNodeId; // Get the ID of the node clicked in the previous state
+      const currentState = historyStack[currentGraphIndex]; 
+      const triggerNodeId = currentState.triggerNodeId; 
 
       const previousIndex = currentGraphIndex - 1;
       const previousGraphState = historyStack[previousIndex];
@@ -528,23 +566,36 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({ yamlContent, yaml
       setEdges(previousGraphState.edges);
       setCurrentGraphIndex(previousIndex);
 
+      // Update model path using the stored fullPath from the previous state
+      if (previousGraphState.fullPath) {
+        onModelPathChange(previousGraphState.fullPath);
+      } else if (previousGraphState.config) {
+        // Fallback if fullPath somehow wasn't set.
+        // We don't have a reliable 'name' on config, so we might need a default
+        // or reconstruct from history if possible, but for now, this is a safety net.
+        // This case should ideally not be hit if fullPath is always set.
+        const fallbackPath = historyStack.slice(0, previousIndex + 1)
+                               .map(s => s.config?.modules ? Object.keys(s.config.modules)[0] : 'unknown') // very rough guess
+                               .join('/');
+        onModelPathChange(fallbackPath || "Model");
+      }
+
+
       // Center on the trigger node if it exists
       setTimeout(() => {
         if (reactFlowInstance) {
           if (triggerNodeId && previousGraphState.nodes.some(n => n.id === triggerNodeId)) {
-            // Fit view to the specific node that was originally clicked
             reactFlowInstance.fitView({ nodes: [{ id: triggerNodeId }], padding: 0.3, duration: 800 });
           } else {
-            // Fallback to fitting the whole view if triggerNodeId is missing or invalid
             const nodeCount = previousGraphState.nodes.length;
             const padding = calculateDynamicPadding(nodeCount);
             const duration = calculateTransitionDuration(nodeCount);
             reactFlowInstance.fitView({ padding: padding, duration: duration });
           }
         }
-      }, 300); // Delay slightly to allow state update
+      }, 300); 
     }
-  }, [currentGraphIndex, historyStack, setNodes, setEdges, setCurrentGraphIndex, reactFlowInstance]);
+  }, [currentGraphIndex, historyStack, setNodes, setEdges, setCurrentGraphIndex, reactFlowInstance, onModelPathChange]);
 
   const resetView = useCallback(() => {
     setTimeout(() => {

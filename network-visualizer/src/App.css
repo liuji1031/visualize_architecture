@@ -44,6 +44,20 @@ body {
   text-decoration: underline;
 }
 
+.app-header h1 { /* Ensure h1 in header doesn't have default margins pushing things around */
+  margin-right: auto; /* Pushes subsequent items to the right */
+}
+
+.model-path-display {
+  font-size: 1em; /* Or adjust as needed, e.g., 0.9em */
+  color: #555; /* A color that fits the light header */
+  margin: 0 20px; /* Provides spacing around the model path text */
+  white-space: nowrap; /* Prevent wrapping if path gets long */
+  overflow: hidden; /* Hide overflow */
+  text-overflow: ellipsis; /* Show ... if too long */
+  max-width: 300px; /* Set a max-width */
+}
+
 /* ReactFlow custom styles */
 /* Force removal of border/background from the outer node wrapper */
 .react-flow__node {
