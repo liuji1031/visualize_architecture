@@ -126,5 +126,3 @@ graph TD
     style J fill:#lightgrey,stroke:#333,stroke-width:2px
     style K fill:#pink,stroke:#333,stroke-width:2px
 ```
-
-This explanation should give you a solid understanding of the frontend architecture. Let me know if you have more specific questions about any part!
