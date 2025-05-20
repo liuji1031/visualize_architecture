@@ -3,9 +3,9 @@ import { YamlConfig, NetworkStructure, YamlModule } from '../types';
 
 // Constants for layout (Exported)
 export const NODE_WIDTH = 200;
-export const NODE_HEIGHT = 100; // Not currently used in NetworkVisualizer, but good to export if needed later
-export const HORIZONTAL_SPACING = 250;
-export const VERTICAL_SPACING = 150; // Not currently used in NetworkVisualizer
+export const NODE_HEIGHT = 100; // Height might be more relevant now
+export const HORIZONTAL_SPACING = 30; // Spacing between nodes in the same rank (horizontal)
+export const VERTICAL_SPACING = 0; // Spacing between ranks (vertical)
 
 /**
  * Process the YAML configuration into a network structure for ReactFlow
@@ -17,8 +17,8 @@ export const processNetworkStructure = (config: YamlConfig): NetworkStructure =>
   
   // Process nodes
   const nodes = Object.entries(modules).map(([moduleName, moduleData]) => {
-    const isEntry = moduleName === 'entry';
-    const isExit = moduleName === 'exit';
+    const isInput = moduleName === 'input';
+    const isOutput = moduleName === 'output';
     
     // Handle different module data formats
     let cls: string | undefined;
@@ -27,11 +27,11 @@ export const processNetworkStructure = (config: YamlConfig): NetworkStructure =>
     let inputSources: string[] | Record<string, string> | undefined;
     let configData: Record<string, any> | string | undefined; // Renamed to avoid conflict with config var name
     
-    if (isEntry) {
-      // Entry module has inputs directly as an array
+    if (isInput) {
+      // Input module has inputs directly as an array
       inputSources = moduleData as string[];
-    } else if (isExit) {
-      // Exit module has outputs directly as a record
+    } else if (isOutput) {
+      // Output module has outputs directly as a record
       inputSources = moduleData as Record<string, string>;
     } else {
       // Regular module with YamlModule structure
@@ -48,14 +48,14 @@ export const processNetworkStructure = (config: YamlConfig): NetworkStructure =>
 
     return {
       id: moduleName,
-      type: isEntry ? 'input' : isExit ? 'output' : 'default',
+      type: isInput ? 'input' : isOutput ? 'output' : 'default',
       position: { x: 0, y: 0 }, // Will be calculated by layout algorithm
       data: {
         label: moduleName,
         cls,
         module_type, // Add module_type to node data
-        isEntry,
-        isExit,
+        isInput,
+        isOutput,
         outNum,
         inputSources, // Include input sources information
         config: configData // Use renamed variable
@@ -67,18 +67,18 @@ export const processNetworkStructure = (config: YamlConfig): NetworkStructure =>
   const edges: NetworkStructure['edges'] = [];
   
   Object.entries(modules).forEach(([moduleName, moduleData]) => {
-    if (moduleName === 'entry') {
-      // Skip entry module as it doesn't have real connections
+    if (moduleName === 'input') {
+      // Skip input module as it doesn't have real connections
       return;
     }
     
-    if (moduleName === 'exit') {
-      // Handle exit module which can have inputs as either a list or a dictionary
+    if (moduleName === 'output') {
+      // Handle output module which can have inputs as either a list or a dictionary
       if (Array.isArray(moduleData)) {
-        // Exit module has inputs as a list
-        const exitInputs = moduleData as string[];
+        // Output module has inputs as a list
+        const outputInputs = moduleData as string[];
         
-        exitInputs.forEach((inputSource, index) => {
+        outputInputs.forEach((inputSource, index) => {
           const [sourceName, sourceOutput] = parseInputSource(inputSource);
           
           // Check if the source module has multiple outputs
@@ -107,10 +107,10 @@ export const processNetworkStructure = (config: YamlConfig): NetworkStructure =>
           });
         });
       } else {
-        // Exit module has inputs as a dictionary
-        const exitInputs = moduleData as Record<string, string>;
+        // Output module has inputs as a dictionary
+        const outputInputs = moduleData as Record<string, string>;
         
-        Object.entries(exitInputs).forEach(([outputName, inputSource]) => {
+        Object.entries(outputInputs).forEach(([outputName, inputSource]) => {
           const [sourceName, sourceOutput] = parseInputSource(inputSource);
           
           // Check if the source module has multiple outputs
@@ -148,17 +148,17 @@ export const processNetworkStructure = (config: YamlConfig): NetworkStructure =>
       const inputs = regularModule.inp_src as string[];
       
       inputs.forEach((input, index) => {
-        // Check if the input is referencing an entry module input
-        const entryInputs = modules.entry as string[];
-        const entryInputIndex = entryInputs.indexOf(input);
+        // Check if the input is referencing an input module input
+        const inputInputs = modules.input as string[];
+        const inputInputIndex = inputInputs.indexOf(input);
         
-        if (entryInputIndex !== -1) {
-          // Connection from entry module with arbitrary input name
+        if (inputInputIndex !== -1) {
+          // Connection from input module with arbitrary input name
           edges.push({
-            id: `entry-${input}-to-${moduleName}-${index}`,
-            source: 'entry',
+            id: `input-${input}-to-${moduleName}-${index}`,
+            source: 'input',
             target: moduleName,
-            sourceHandle: `output-${entryInputIndex}`,
+            sourceHandle: `output-${inputInputIndex}`,
             targetHandle: `input-${index}`,
             data: {
               label: input
@@ -185,7 +185,7 @@ export const processNetworkStructure = (config: YamlConfig): NetworkStructure =>
   
   // Apply layout algorithm
   const { nodes: positionedNodes } = applyLayout({ nodes, edges });
-  
+
   return {
     nodes: positionedNodes,
     edges
@@ -193,12 +193,41 @@ export const processNetworkStructure = (config: YamlConfig): NetworkStructure =>
 };
 
 /**
+ * Compute a point on a cubic Bezier curve at parameter t (0 <= t <= 1)
+ * @param p0 - Start point {x, y}
+ * @param p1 - First control point {x, y}
+ * @param p2 - Second control point {x, y}
+ * @param p3 - End point {x, y}
+ * @param t - Parameter (0=start, 1=end)
+ * @returns {x, y} point on the curve
+ */
+export function cubicBezierPoint(
+  p0: { x: number; y: number },
+  p1: { x: number; y: number },
+  p2: { x: number; y: number },
+  p3: { x: number; y: number },
+  t: number
+): { x: number; y: number } {
+  const x =
+    Math.pow(1 - t, 3) * p0.x +
+    3 * Math.pow(1 - t, 2) * t * p1.x +
+    3 * (1 - t) * Math.pow(t, 2) * p2.x +
+    Math.pow(t, 3) * p3.x;
+  const y =
+    Math.pow(1 - t, 3) * p0.y +
+    3 * Math.pow(1 - t, 2) * t * p1.y +
+    3 * (1 - t) * Math.pow(t, 2) * p2.y +
+    Math.pow(t, 3) * p3.y;
+  return { x, y };
+}
+
+/**
  * Parse an input source string into module name and output index
  * @param inputSource - Input source string (e.g., "module1:0", "module2")
  * @returns Tuple of [moduleName, outputIndex?]
  */
 const parseInputSource = (inputSource: string): [string, number | undefined] => {
-  const parts = inputSource.split(':');
+  const parts = inputSource.split('.'); // Changed delimiter from ':' to '.'
   
   if (parts.length === 1) {
     return [parts[0], undefined];
@@ -217,7 +246,8 @@ export const applyLayout = (network: NetworkStructure): NetworkStructure => {
   
   // Create a new graph
   const g = new dagre.graphlib.Graph();
-  g.setGraph({ rankdir: 'LR', nodesep: HORIZONTAL_SPACING, ranksep: VERTICAL_SPACING });
+  // Set layout direction to Top-to-Bottom ('TB') and adjust spacing
+  g.setGraph({ rankdir: 'TB', nodesep: HORIZONTAL_SPACING, ranksep: VERTICAL_SPACING });
   g.setDefaultEdgeLabel(() => ({}));
   
   // Add nodes to the graph

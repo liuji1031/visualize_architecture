@@ -1,8 +1,14 @@
-import React from 'react';
+import React, { useState, useCallback } from 'react'; // Added useState, useCallback
 import './App.css';
 import NetworkVisualizer from './components/NetworkVisualizer';
 
 function App() {
+  const [currentModelPath, setCurrentModelPath] = useState<string>('');
+
+  const handleModelPathChange = useCallback((newPath: string) => {
+    setCurrentModelPath(newPath);
+  }, []);
+
   return (
     <div className="App">
       <div style={{ 
@@ -11,16 +17,36 @@ function App() {
         height: '100vh', 
         width: '100vw' 
       }}>
-        <header style={{ 
-          padding: '1rem', 
-          backgroundColor: '#f8f9fa', 
-          borderBottom: '1px solid #dee2e6' 
-        }}>
-          <h1 style={{ margin: 0, fontSize: '1.5rem' }}>Neural Network Architecture Visualizer</h1>
+        <header className="app-header">
+          <h1 style={{ margin: 0, fontSize: '1.5rem', marginRight: 'auto' }}>Neural Network Architecture Visualizer</h1>
+          {currentModelPath && (
+            <div className="model-path-display">
+              model: {currentModelPath}
+            </div>
+          )}
+          <div className="header-links">
+            <a
+              href="https://liuji1031.github.io/model_composer_mkdocs/"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Documentation
+            </a>
+            <a
+              href="https://github.com/liuji1031/model_composer"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              GitHub
+            </a>
+          </div>
         </header>
         
         <main style={{ flex: 1, position: 'relative' }}>
-          <NetworkVisualizer />
+          <NetworkVisualizer
+            currentModelPath={currentModelPath}
+            onModelPathChange={handleModelPathChange}
+          />
         </main>
       </div>
     </div>

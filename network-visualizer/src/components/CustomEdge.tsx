@@ -1,8 +1,12 @@
-import React, { memo } from 'react';
+import React, { memo, useContext } from 'react'; // Import useContext
 import { EdgeProps, getBezierPath, EdgeLabelRenderer } from 'reactflow';
 import { ModuleEdgeData } from '../types';
+import { EdgeLabelContext } from './NetworkVisualizer'; // Import the context
 
-const CustomEdge: React.FC<EdgeProps<ModuleEdgeData>> = ({
+// Remove showLabels from props interface
+interface CustomEdgeProps extends EdgeProps<ModuleEdgeData> {}
+
+const CustomEdge: React.FC<CustomEdgeProps> = ({
   id,
   source,
   target,
@@ -16,6 +20,9 @@ const CustomEdge: React.FC<EdgeProps<ModuleEdgeData>> = ({
   style = {},
   markerEnd,
 }) => {
+  // Consume the context value
+  const showLabels = useContext(EdgeLabelContext);
+
   // Calculate the path for the edge
   const [edgePath, labelX, labelY] = getBezierPath({
     sourceX,
@@ -55,7 +62,8 @@ const CustomEdge: React.FC<EdgeProps<ModuleEdgeData>> = ({
         markerEnd={markerEnd}
       />
       
-      {data?.label && (
+      {/* Conditionally render label based on context */}
+      {showLabels && data?.label && (
         <EdgeLabelRenderer>
           <div
             style={{

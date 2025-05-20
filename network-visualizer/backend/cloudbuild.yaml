@@ -1,0 +1,18 @@
+steps:
+- name: 'gcr.io/cloud-builders/docker'
+  args: 
+  - 'build'
+  - '--build-arg'
+  - 'FLASK_SECRET_KEY=$$(gcloud secrets versions access latest --secret=flask-secret-key)'
+  - '--tag'
+  - 'gcr.io/network-visualizer-36300/network-visualizer-backend'
+  - '.'
+  secretEnv: ['FLASK_SECRET_KEY']
+images:
+- 'gcr.io/network-visualizer-36300/network-visualizer-backend'
+availableSecrets:
+  secretManager:
+  - versionName: projects/$PROJECT_NUMBER/secrets/flask_secret_key/versions/latest
+    env: 'FLASK_SECRET_KEY'
+
+    

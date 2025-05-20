@@ -1,68 +1,32 @@
 import React, { memo, useState, useCallback } from 'react';
-import { Handle, Position, NodeProps } from 'reactflow';
+import { Handle, Position, NodeProps, Node } from 'reactflow'; // Import Node type
 import { ModuleNodeData } from '../types';
 import yaml from 'js-yaml';
+import { getNodeBackgroundColor, nodeTypeStyles } from '../utils/colorUtils'; // Import color utils
 
-// Styles for the custom node
+// Styles for the custom node (Simplified)
 const nodeStyles: React.CSSProperties = {
-  padding: '10px',
-  borderRadius: '5px',
-  width: '180px',
+  padding: '10px 15px', // Adjusted padding
+  borderRadius: '8px', // Slightly more rounded corners
+  // width: '180px', // Let width be more dynamic based on content? Or keep fixed? Let's try dynamic first.
+  minWidth: '150px', // Ensure a minimum width
   fontSize: '12px',
   color: '#222',
   textAlign: 'center',
   borderWidth: '1px',
   borderStyle: 'solid',
-  opacity: 1
+  // Removed opacity, assuming it's not needed
+  // Removed the double-box effect by ensuring no extra borders or shadows are implicitly added
+  // Background color will be set based on type/cls
+  position: 'relative', // Needed for absolute positioning of handles
 };
 
-// Function to generate a consistent hash from a string
-const hashString = (str: string): number => {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash; // Convert to 32bit integer
-  }
-  return Math.abs(hash);
-};
-
-// Function to generate a color based on a class name
-const generateColorFromCls = (cls: string): string => {
-  const hash = hashString(cls);
-  
-  // Use HSL color model for better control over saturation and lightness
-  // Hue: 0-360 (full color spectrum)
-  // Saturation: 25-45% (not too saturated)
-  // Lightness: 75-85% (light enough for text readability)
-  const hue = hash % 360;
-  const saturation = 50 + (hash % 20); // 50-70%
-  const lightness = 75 + (hash % 10); // 75-85%
-  
-  return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
-};
-
-// Different styles for different node types
-const nodeTypeStyles = {
-  entry: {
-    backgroundColor: '#a2c3fa',
-    borderColor: '#949494'
-  },
-  exit: {
-    backgroundColor: '#ffc891',
-    borderColor: '#949494'
-  },
-  default: {
-    backgroundColor: '#f2c496',
-    borderColor: '#949494'
-  }
-};
-
-// Handle styles
+// Handle styles (Adjusted for top/bottom)
 const handleStyle = {
   width: '10px',
   height: '10px',
-  borderRadius: '50%'
+  borderRadius: '50%',
+  background: '#555', // Make handles more visible
 };
 
 // Tooltip styles
@@ -76,9 +40,12 @@ const tooltipStyles: React.CSSProperties = {
   padding: '10px',
   borderRadius: '5px',
   fontSize: '12px',
-  zIndex: 1000,
-  minWidth: '200px',
-  maxWidth: '300px',
+  zIndex: 9999, // High z-index to ensure it's above everything
+  minWidth: '250px',
+  maxWidth: '500px',
+  width: 'auto',
+  maxHeight: '80vh',
+  overflow: 'auto',
   textAlign: 'left',
   boxShadow: '0 2px 10px rgba(0, 0, 0, 0.2)',
   pointerEvents: 'none',
@@ -91,50 +58,40 @@ interface CustomNodeProps extends NodeProps<ModuleNodeData> {
 }
 
 const CustomNode: React.FC<CustomNodeProps> = ({ data, isConnectable, id, ...props }) => { // Destructure props to get onNodeDoubleClick
-  const { label, cls, isEntry, isExit, outNum = 1, config } = data;
-  const [showTooltip, setShowTooltip] = useState(false);
+  const { label, cls, isInput, isOutput, outNum = 1, config } = data;
+  // const [showTooltip, setShowTooltip] = useState(false); // Removed state
+  const [isAnimating, setIsAnimating] = useState(false);
   const { onNodeDoubleClick } = props; // Get the callback from props
 
-  // Determine node type for styling
-  const nodeType = isEntry ? 'entry' : isExit ? 'exit' : 'default';
-  
-  // Generate style based on cls for non-entry/exit nodes
-  let nodeStyle = nodeTypeStyles[nodeType];
-  if (!isEntry && !isExit && cls) {
-    if (cls === 'ComposableModel') {
-      // Use specific color for ComposableModel nodes
-      nodeStyle = {
-        ...nodeTypeStyles.default,
-        backgroundColor: '#b8a6ed'
-      };
-    } else {
-      // For other nodes, use the color generated from cls
-      nodeStyle = {
-        ...nodeTypeStyles.default,
-        backgroundColor: generateColorFromCls(cls)
-      };
-    }
+  // Get background color using the utility function
+  const backgroundColor = getNodeBackgroundColor(data);
+  let borderColor = nodeTypeStyles.default.borderColor; // Default border color
+
+  if (data.isInput) {
+    borderColor = nodeTypeStyles.input.borderColor;
+  } else if (data.isOutput) {
+    borderColor = nodeTypeStyles.output.borderColor;
   }
   
   // Calculate the number of input and output handles
   let inputCount = 0;
   let outputCount = 0;
   
-  if (isEntry) {
-    // Entry node has no inputs, but has outputs based on inputSources
-    const entrySources = data.inputSources as string[] || [];
+  if (isInput) {
+    // Input node has no inputs, but has outputs based on inputSources
+    const inputSources = data.inputSources as string[] || [];
     inputCount = 0;
-    outputCount = entrySources.length;
-  } else if (isExit) {
-    // Exit node has inputs based on inputSources, but no outputs
+    outputCount = inputSources.length;
+  } else if (isOutput) {
+    // Output node has inputs based on inputSources, but no outputs
     if (Array.isArray(data.inputSources)) {
-      // Exit node has inputs as a list
-      const exitInputs = data.inputSources as string[] || [];
-      inputCount = exitInputs.length;
+      // Output node has inputs as a list
+      const outputInputs = data.inputSources as string[] || [];
+      inputCount = outputInputs.length;
     } else {
-      // Exit node has inputs as a dictionary
-      const exitInputs = data.inputSources as Record<string, string> || {};
-      inputCount = Object.keys(exitInputs).length;
+      // Output node has inputs as a dictionary
+      const outputInputs = data.inputSources as Record<string, string> || {};
+      inputCount = Object.keys(outputInputs).length;
     }
     outputCount = 0;
   } else {
@@ -147,84 +104,76 @@ const CustomNode: React.FC<CustomNodeProps> = ({ data, isConnectable, id, ...pro
   // Calculate the maximum number of handles
   const maxHandles = Math.max(inputCount, outputCount);
   
-  // Calculate the node height based on the maximum number of handles
-  const nodeHeight = 30 + maxHandles * 20;
-  
-  // Create the style with dynamic height
-  const style = { 
-    ...nodeStyles, 
-    ...nodeStyle,
-    height: `${nodeHeight}px`
+  // Calculate the node width based on the maximum number of handles
+  const nodeWidth = 100 + maxHandles * 25; // Adjust width based on handles
+
+  // Create the style with dynamic width and calculated background color
+  const style = {
+    ...nodeStyles,
+    backgroundColor: backgroundColor,
+    borderColor: borderColor,
+    width: `${nodeWidth}px`,
+    // Height can be auto or fixed, let's try auto first
+    height: 'auto', // Let height adjust to content + padding
+    minHeight: '40px', // Ensure a minimum height
   };
   
   // Generate input handles
   const renderInputHandles = () => {
-    if (isEntry) {
-      // Entry node doesn't have input handles
+    if (isInput) {
+      // Input node doesn't have input handles
       return null;
     }
     
-    if (isExit) {
-      // Exit node can have inputs as either a list or a dictionary
+    if (isOutput) {
+      // Output node can have inputs as either a list or a dictionary
       let outputNames: string[] = [];
       let totalHandles = 0;
       
       let isList = false;
       if (Array.isArray(data.inputSources)) {
-        // Exit node has inputs as a list
-        const exitInputs = data.inputSources as string[];
-        totalHandles = exitInputs.length;
-        outputNames = exitInputs.map((_, index) => index.toString());
+        // Output node has inputs as a list
+        const outputInputs = data.inputSources as string[];
+        totalHandles = outputInputs.length;
+        outputNames = outputInputs.map((_, index) => index.toString());
         isList = true;
       } else {
-        // Exit node has inputs as a dictionary
-        const exitInputs = data.inputSources as Record<string, string>;
-        outputNames = Object.keys(exitInputs);
+        // Output node has inputs as a dictionary
+        const outputInputs = data.inputSources as Record<string, string>;
+        outputNames = Object.keys(outputInputs);
         totalHandles = outputNames.length;
       }
       
-      // Calculate handle positions for exit node
+      // Calculate handle positions for output node (only horizontal needed now)
       
       return (
         <>
           {outputNames.map((outputName, index) => {
-            // Calculate position in pixels
-            let topPosition;
+            // Calculate horizontal position for handles
+            let leftPosition;
             if (totalHandles === 1) {
-              // If only one handle, center it
-              topPosition = nodeHeight / 2;
+              leftPosition = nodeWidth / 2; // Center if only one handle
             } else {
-              // For multiple handles
-              const topPadding = 20; // 20px from top
-              const bottomPadding = 20; // 20px from bottom
-              const availableHeight = nodeHeight - topPadding - bottomPadding;
-              
-              if (index === 0) {
-                // First handle
-                topPosition = topPadding;
-              } else if (index === totalHandles - 1) {
-                // Last handle
-                topPosition = nodeHeight - bottomPadding;
-              } else {
-                // Handles in between
-                const step = availableHeight / (totalHandles - 1);
-                topPosition = topPadding + (index * step);
-              }
+              const leftPadding = 20; // 20px from left
+              const rightPadding = 20; // 20px from right
+              const availableWidth = nodeWidth - leftPadding - rightPadding;
+              const step = availableWidth / (totalHandles - 1);
+              leftPosition = leftPadding + index * step;
             }
-            
+
             // Convert to percentage for CSS
-            const topPercentage = (topPosition / nodeHeight) * 100;
-            
+            const leftPercentage = (leftPosition / nodeWidth) * 100;
+
             return (
               <React.Fragment key={`input-fragment-${outputName}`}>
                 <Handle
                   key={`input-${outputName}`}
                   type="target"
-                  position={Position.Left}
+                  position={Position.Top} // Changed to Top
                   id={`input-${outputName}`}
                   style={{
                     ...handleStyle,
-                    top: `${topPercentage}%`
+                    left: `${leftPercentage}%`, // Use left for horizontal positioning
                   }}
                   isConnectable={isConnectable}
                 />
@@ -232,10 +181,12 @@ const CustomNode: React.FC<CustomNodeProps> = ({ data, isConnectable, id, ...pro
                   <div
                     style={{
                       position: 'absolute',
-                      left: '20px',
-                      top: `${topPercentage - 6}%`, // Slightly above the handle
+                      left: `${leftPercentage}%`, // Align with handle
+                      top: '-15px', // Position above the handle
+                      transform: 'translateX(-50%)', // Center the text
                       fontSize: '10px',
-                      textAlign: 'left'
+                      textAlign: 'center',
+                      whiteSpace: 'nowrap',
                     }}
                   >
                     {outputName}
@@ -247,48 +198,36 @@ const CustomNode: React.FC<CustomNodeProps> = ({ data, isConnectable, id, ...pro
         </>
       );
     }
-    
+
     // Regular nodes have numbered input handles based on their input sources
     const inputs = data.inputSources as string[] || [];
     const inputCount = inputs.length;
-    
+
     return Array.from({ length: inputCount }).map((_, index) => {
-      // Calculate position in pixels
-      let topPosition;
+      // Calculate horizontal position for handles
+      let leftPosition;
       if (inputCount === 1) {
-        // If only one handle, center it
-        topPosition = nodeHeight / 2;
+        leftPosition = nodeWidth / 2; // Center if only one handle
       } else {
-        // For multiple handles
-        const topPadding = 20; // 20px from top
-        const bottomPadding = 20; // 20px from bottom
-        const availableHeight = nodeHeight - topPadding - bottomPadding;
-        
-        if (index === 0) {
-          // First handle
-          topPosition = topPadding;
-        } else if (index === inputCount - 1) {
-          // Last handle
-          topPosition = nodeHeight - bottomPadding;
-        } else {
-          // Handles in between
-          const step = availableHeight / (inputCount - 1);
-          topPosition = topPadding + (index * step);
-        }
+        const leftPadding = 20; // 20px from left
+        const rightPadding = 20; // 20px from right
+        const availableWidth = nodeWidth - leftPadding - rightPadding;
+        const step = availableWidth / (inputCount - 1);
+        leftPosition = leftPadding + index * step;
       }
-      
+
       // Convert to percentage for CSS
-      const topPercentage = (topPosition / nodeHeight) * 100;
-      
+      const leftPercentage = (leftPosition / nodeWidth) * 100;
+
       return (
         <Handle
           key={`input-${index}`}
           type="target"
-          position={Position.Left}
+          position={Position.Top} // Changed to Top
           id={`input-${index}`}
           style={{
             ...handleStyle,
-            top: `${topPercentage}%`
+            left: `${leftPercentage}%`, // Use left for horizontal positioning
           }}
           isConnectable={isConnectable}
         />
@@ -298,100 +237,76 @@ const CustomNode: React.FC<CustomNodeProps> = ({ data, isConnectable, id, ...pro
   
   // Generate output handles
   const renderOutputHandles = () => {
-    if (isExit) {
-      // Exit node doesn't have output handles
+    if (isOutput) {
+      // Output node doesn't have output handles
       return null;
     }
     
-    if (isEntry) {
-      // Entry node has output handles based on its input sources
-      const entrySources = data.inputSources as string[] || [];
-      const outputCount = entrySources.length;
+    if (isInput) {
+      // Input node has output handles based on its input sources
+      const inputSources = data.inputSources as string[] || [];
+      const outputCount = inputSources.length;
       
       return Array.from({ length: outputCount }).map((_, index) => {
-        // Calculate position in pixels
-        let topPosition;
+        // Calculate horizontal position for handles
+        let leftPosition;
         if (outputCount === 1) {
-          // If only one handle, center it
-          topPosition = nodeHeight / 2;
+          leftPosition = nodeWidth / 2; // Center if only one handle
         } else {
-          // For multiple handles
-          const topPadding = 20; // 20px from top
-          const bottomPadding = 20; // 20px from bottom
-          const availableHeight = nodeHeight - topPadding - bottomPadding;
-          
-          if (index === 0) {
-            // First handle
-            topPosition = topPadding;
-          } else if (index === outputCount - 1) {
-            // Last handle
-            topPosition = nodeHeight - bottomPadding;
-          } else {
-            // Handles in between
-            const step = availableHeight / (outputCount - 1);
-            topPosition = topPadding + (index * step);
-          }
+          const leftPadding = 20; // 20px from left
+          const rightPadding = 20; // 20px from right
+          const availableWidth = nodeWidth - leftPadding - rightPadding;
+          const step = availableWidth / (outputCount - 1);
+          leftPosition = leftPadding + index * step;
         }
-        
+
         // Convert to percentage for CSS
-        const topPercentage = (topPosition / nodeHeight) * 100;
-        
+        const leftPercentage = (leftPosition / nodeWidth) * 100;
+
         return (
           <Handle
             key={`output-${index}`}
             type="source"
-            position={Position.Right}
+            position={Position.Bottom} // Changed to Bottom
             id={`output-${index}`}
             style={{
               ...handleStyle,
-              top: `${topPercentage}%`
+              left: `${leftPercentage}%`, // Use left for horizontal positioning
             }}
             isConnectable={isConnectable}
           />
         );
       });
     }
-    
+
     // Number of outputs for regular nodes
     const outputCount = outNum || 1;
-    
+
     return Array.from({ length: outputCount }).map((_, index) => {
-      // Calculate position in pixels
-      let topPosition;
+      // Calculate horizontal position for handles
+      let leftPosition;
       if (outputCount === 1) {
-        // If only one handle, center it
-        topPosition = nodeHeight / 2;
+        leftPosition = nodeWidth / 2; // Center if only one handle
       } else {
-        // For multiple handles
-        const topPadding = 20; // 20px from top
-        const bottomPadding = 20; // 20px from bottom
-        const availableHeight = nodeHeight - topPadding - bottomPadding;
-        
-        if (index === 0) {
-          // First handle
-          topPosition = topPadding;
-        } else if (index === outputCount - 1) {
-          // Last handle
-          topPosition = nodeHeight - bottomPadding;
-        } else {
-          // Handles in between
-          const step = availableHeight / (outputCount - 1);
-          topPosition = topPadding + (index * step);
-        }
+        const leftPadding = 20; // 20px from left
+        const rightPadding = 20; // 20px from right
+        const availableWidth = nodeWidth - leftPadding - rightPadding;
+        const step = availableWidth / (outputCount - 1);
+        leftPosition = leftPadding + index * step;
       }
-      
+
       // Convert to percentage for CSS
-      const topPercentage = (topPosition / nodeHeight) * 100;
-      
+      const leftPercentage = (leftPosition / nodeWidth) * 100;
+
       return (
         <Handle
           key={`output-${index}`}
           type="source"
-          position={Position.Right}
+          position={Position.Bottom} // Changed to Bottom
           id={`output-${index}`}
           style={{
             ...handleStyle,
-            top: `${topPercentage}%`
+            left: `${leftPercentage}%`, // Use left for horizontal positioning
           }}
           isConnectable={isConnectable}
         />
@@ -440,38 +355,40 @@ const CustomNode: React.FC<CustomNodeProps> = ({ data, isConnectable, id, ...pro
 
   // Handle double click for ComposableModel nodes with config paths
   const handleDoubleClick = useCallback(() => {
+    if (cls === 'ComposableModel') {
+      setIsAnimating(true);
+      setTimeout(() => setIsAnimating(false), 400);
+    }
     if (onNodeDoubleClick && cls === 'ComposableModel' && typeof config === 'string') {
       onNodeDoubleClick(id, config, label);
     }
   }, [id, cls, config, onNodeDoubleClick, label]);
   
+  // Format config for display in YAML format
+  const formattedConfig = formatConfig(config);
+
   return (
     <div 
       style={style}
-      onMouseEnter={() => setShowTooltip(true)}
-      onMouseLeave={() => setShowTooltip(false)}
+      className={isAnimating && cls === 'ComposableModel' ? 'composable-animate' : undefined}
       onDoubleClick={handleDoubleClick} // Add double click handler
       data-testid={`node-${id}`}
+      data-tooltip-id="node-tooltip" // Added for react-tooltip
+      data-tooltip-content={formattedConfig} // Added for react-tooltip
     >
-      <div style={{ 
-        display: 'flex', 
+      {/* Simplified inner div */}
+      <div style={{
+        display: 'flex',
         flexDirection: 'column',
         justifyContent: 'center',
         alignItems: 'center',
-        height: '100%',
-        position: 'relative',
-        zIndex: 1
+        height: '100%', // Take full height of the parent div
+        // No extra positioning needed here now
       }}>
         <div style={{ fontWeight: 'bold' }}>{label}</div>
         {cls && <div style={{ fontSize: '10px' }}>{cls}</div>}
         
-        {/* Config tooltip */}
-        {showTooltip && config && (
-          <div style={tooltipStyles}>
-            <div style={{ fontWeight: 'bold', marginBottom: '5px' }}>Configuration:</div>
-            <pre style={{ margin: 0 }}>{formatConfig(config)}</pre>
-          </div>
-        )}
+        {/* Removed inline tooltip div */}
       </div>
       
       {renderInputHandles()}

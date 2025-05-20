@@ -17,8 +17,8 @@ export interface YamlConfig {
 export interface ModuleNodeData {
   label: string;
   cls?: string;
-  isEntry?: boolean;
-  isExit?: boolean;
+  isInput?: boolean;
+  isOutput?: boolean;
   module_type?: string; // Added to store the type like 'ComposableModel'
   outNum?: number;
   inputSources?: string[] | Record<string, string>; // Add input sources information

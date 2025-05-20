@@ -16,16 +16,59 @@ body {
   text-align: left;
 }
 
-/* ReactFlow custom styles */
-.react-flow__node {
-  border-radius: 5px;
-  font-size: 12px;
-  color: #222;
-  text-align: center;
-  border-width: 1px;
-  border-style: solid;
+.app-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem;
+  background-color: #f8f9fa;
+  border-bottom: 1px solid #dee2e6;
 }
 
+.header-links {
+  display: flex;
+  align-items: center;
+}
+
+.header-links a {
+  margin-left: 1.2rem;
+  color: #0366d6;
+  text-decoration: none;
+  font-weight: 500;
+  font-size: 1.25rem;
+  transition: color 0.2s;
+}
+
+.header-links a:hover {
+  color: #0056b3;
+  text-decoration: underline;
+}
+
+.app-header h1 { /* Ensure h1 in header doesn't have default margins pushing things around */
+  margin-right: auto; /* Pushes subsequent items to the right */
+}
+
+.model-path-display {
+  font-size: 1em; /* Or adjust as needed, e.g., 0.9em */
+  color: #555; /* A color that fits the light header */
+  margin: 0 20px; /* Provides spacing around the model path text */
+  white-space: nowrap; /* Prevent wrapping if path gets long */
+  overflow: hidden; /* Hide overflow */
+  text-overflow: ellipsis; /* Show ... if too long */
+  max-width: 300px; /* Set a max-width */
+}
+
+/* ReactFlow custom styles */
+/* Force removal of border/background from the outer node wrapper */
+.react-flow__node {
+  border: none !important;
+  background: none !important;
+  border-radius: 0 !important; /* Reset radius on outer wrapper */
+  padding: 0 !important; /* Reset padding on outer wrapper */
+}
+
+/* Remove redundant inner custom node styles as they are handled inline */
+/*
 .react-flow__node-custom {
   padding: 10px;
   border-radius: 5px;
@@ -36,6 +79,7 @@ body {
   border-width: 1px;
   border-style: solid;
 }
+*/
 
 .react-flow__handle {
   width: 10px;
@@ -108,4 +152,23 @@ button:hover {
 
 button:active {
   transform: translateY(1px);
+}
+
+.composable-animate {
+  animation: composable-pulse 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  z-index: 10;
+}
+@keyframes composable-pulse {
+  0% {
+    box-shadow: 0 0 0 0 #4a90e2;
+    transform: scale(1);
+  }
+  50% {
+    box-shadow: 0 0 16px 8px #4a90e2;
+    transform: scale(1.08);
+  }
+  100% {
+    box-shadow: 0 0 0 0 #4a90e2;
+    transform: scale(1);
+  }
 }
