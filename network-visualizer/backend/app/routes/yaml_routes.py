@@ -1,134 +1,59 @@
-from flask import Blueprint, request, jsonify, make_response # Import make_response
+from flask import Blueprint, request, jsonify, make_response
 from werkzeug.utils import secure_filename
 import os
-import tempfile # Still needed for local extraction before GCS upload
+import tempfile
 import traceback
 import shutil
 import zipfile
-import io
-import glob # May still be useful for local temp processing
-import yaml
-import uuid # For generating unique upload IDs
-import base64 # For image data processing
-from google.cloud import storage # Import GCS client
+import uuid
 
 from ..services.yaml_service import (
     parse_yaml_content,
-    process_yaml_file, # This function will need significant changes
+    process_yaml_file,
     fetch_yaml_file,
-    find_all_config_references, # This might need GCS adaptation
-    find_config_references # This might need GCS adaptation
+    find_all_config_references
 )
 
 from ..services.image_service import crop_image
 
-# --- GCS Configuration ---
-# Get bucket name from environment variable
-GCS_BUCKET_NAME = os.environ.get('GCS_BUCKET_NAME')
-if not GCS_BUCKET_NAME:
-    print("WARNING: GCS_BUCKET_NAME environment variable not set.")
-    # Optionally, raise an error or use a default for local dev?
-    # raise ValueError("GCS_BUCKET_NAME environment variable is required.")
+# --- Local Storage Configuration ---
+# Define the base directory for local file storage
+LOCAL_UPLOAD_DIR = os.environ.get('LOCAL_UPLOAD_DIR', os.path.join(tempfile.gettempdir(), 'yaml_uploads'))
+LOCAL_PRESETS_DIR = os.environ.get('LOCAL_PRESETS_DIR', os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'presets'))
 
-# Define the path for pre-uploaded configurations
-PRESETS_PATH = os.environ.get('PRESETS_PATH', 'presets/')
+# Ensure directories exist
+os.makedirs(LOCAL_UPLOAD_DIR, exist_ok=True)
+os.makedirs(LOCAL_PRESETS_DIR, exist_ok=True)
 
-# Define a temporary directory for file uploads
-TEMP_UPLOAD_DIR = os.environ.get('TEMP_UPLOAD_DIR', '/tmp/yaml_uploads')
-# Ensure the directory exists
-os.makedirs(TEMP_UPLOAD_DIR, exist_ok=True)
-
-# Initialize GCS client (consider initializing within create_app or using Flask-Executor for background tasks)
-# For simplicity here, initialize globally. Ensure credentials are set up in the environment (e.g., GOOGLE_APPLICATION_CREDENTIALS).
-try:
-    storage_client = storage.Client()
-    gcs_bucket = storage_client.bucket(GCS_BUCKET_NAME) if GCS_BUCKET_NAME else None
-except Exception as e:
-    print(f"ERROR: Failed to initialize GCS client: {e}")
-    storage_client = None
-    gcs_bucket = None
-# --- End GCS Configuration ---
+print(f"Local storage: Upload directory: {LOCAL_UPLOAD_DIR}")
+print(f"Local storage: Presets directory: {LOCAL_PRESETS_DIR}")
+# --- End Local Storage Configuration ---
 
 # Create a blueprint for YAML routes
 yaml_bp = Blueprint('yaml', __name__, url_prefix='/api/yaml')
 
-# --- Helper Function for GCS Upload ---
-def upload_to_gcs(local_file_path, gcs_blob_name):
-    """Uploads a file to the GCS bucket."""
-    if not gcs_bucket:
-        raise ConnectionError("GCS bucket not initialized.")
-    try:
-        blob = gcs_bucket.blob(gcs_blob_name)
-        blob.upload_from_filename(local_file_path)
-        print(f"File {local_file_path} uploaded to gs://{GCS_BUCKET_NAME}/{gcs_blob_name}.")
-        return f"gs://{GCS_BUCKET_NAME}/{gcs_blob_name}" # Return the GCS URI
-    except Exception as e:
-        print(f"ERROR: Failed to upload {local_file_path} to GCS: {e}")
-        raise
+# --- Helper Functions for Local Storage ---
+def get_upload_path(upload_id: str, relative_path: str = '') -> str:
+    """Get the full local path for an upload."""
+    upload_base = os.path.join(LOCAL_UPLOAD_DIR, 'uploads', upload_id)
+    if relative_path:
+        return os.path.join(upload_base, relative_path)
+    return upload_base
 
-# --- Helper Function for GCS Cleanup ---
-def delete_gcs_prefix(prefix):
-    """Deletes all blobs in the GCS bucket with the given prefix."""
-    if not gcs_bucket:
-        print("WARNING: GCS bucket not initialized. Cannot delete prefix.")
-        return
-    try:
-        blobs = storage_client.list_blobs(GCS_BUCKET_NAME, prefix=prefix)
-        count = 0
-        for blob in blobs:
-            blob.delete()
-            count += 1
-        print(f"Deleted {count} blobs with prefix '{prefix}' from GCS bucket '{GCS_BUCKET_NAME}'.")
-    except Exception as e:
-        print(f"ERROR: Failed to delete GCS prefix '{prefix}': {e}")
-        # Don't raise, just log the error for cleanup
+def copy_file_to_upload(local_file_path: str, upload_id: str, relative_path: str):
+    """Copy a file to the local upload directory."""
+    dest_path = get_upload_path(upload_id, relative_path)
+    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+    shutil.copy2(local_file_path, dest_path)
+    print(f"Copied {local_file_path} to {dest_path}")
+    return dest_path
 
-# --- Helper Function for Local Temp Directory Cleanup ---
-def cleanup_temp_directory():
-    """
-    Cleans up the local temporary directory by removing all files in it.
-    This function is designed to be safe and not raise exceptions.
-    """
-    try:
-        # In Cloud Run, we should use a directory that's definitely writable
-        # /tmp is generally available in most container environments
-        if os.path.exists(TEMP_UPLOAD_DIR):
-            print(f"Attempting to clean up temporary directory: {TEMP_UPLOAD_DIR}")
-            try:
-                # Check if we have write permissions by creating a test file
-                test_file = os.path.join(TEMP_UPLOAD_DIR, '.test_write_permission')
-                with open(test_file, 'w') as f:
-                    f.write('test')
-                os.remove(test_file)
-                
-                # If we get here, we have write permissions
-                # Remove all files and subdirectories in the temp directory
-                for item in os.listdir(TEMP_UPLOAD_DIR):
-                    item_path = os.path.join(TEMP_UPLOAD_DIR, item)
-                    try:
-                        if os.path.isfile(item_path):
-                            os.unlink(item_path)
-                        elif os.path.isdir(item_path):
-                            shutil.rmtree(item_path)
-                    except Exception as item_error:
-                        print(f"WARNING: Could not remove {item_path}: {item_error}")
-                        # Continue with other files even if one fails
-                        continue
-                print(f"Successfully cleaned up temporary directory: {TEMP_UPLOAD_DIR}")
-            except Exception as perm_error:
-                print(f"WARNING: No write permission for {TEMP_UPLOAD_DIR}: {perm_error}")
-                # Don't try to create or clean if we don't have permissions
-        else:
-            # Create the directory if it doesn't exist
-            try:
-                os.makedirs(TEMP_UPLOAD_DIR, exist_ok=True)
-                print(f"Created temporary directory: {TEMP_UPLOAD_DIR}")
-            except Exception as mkdir_error:
-                print(f"WARNING: Could not create directory {TEMP_UPLOAD_DIR}: {mkdir_error}")
-                # If we can't create the directory, we'll use tempfile.mkdtemp() later
-    except Exception as e:
-        print(f"WARNING: Failed to clean up temporary directory {TEMP_UPLOAD_DIR}: {e}")
-        # Don't raise, just log the warning
+def delete_upload_directory(upload_id: str):
+    """Delete an entire upload directory."""
+    upload_path = get_upload_path(upload_id)
+    if os.path.exists(upload_path):
+        shutil.rmtree(upload_path)
+        print(f"Deleted upload directory: {upload_path}")
 
 # --- Modified Routes ---
 
@@ -136,7 +61,7 @@ def cleanup_temp_directory():
 @yaml_bp.route('/cleanup-upload', methods=['POST'])
 def cleanup_upload():
     """
-    Clean up the GCS objects associated with a specific upload ID.
+    Clean up the local files associated with a specific upload ID.
     Request body:
         uploadId: The unique ID for the upload session.
     """
@@ -146,15 +71,11 @@ def cleanup_upload():
     if not upload_id:
         return jsonify({'error': 'No uploadId provided'}), 400
 
-    if not gcs_bucket:
-         return jsonify({'error': 'GCS not configured on server'}), 500
-
-    gcs_prefix = f"uploads/{upload_id}/"
     try:
-        delete_gcs_prefix(gcs_prefix)
+        delete_upload_directory(upload_id)
         return jsonify({'message': f'Upload context {upload_id} cleaned up successfully'}), 200
     except Exception as e:
-        error_message = f"Error cleaning up GCS upload context {upload_id}: {str(e)}"
+        error_message = f"Error cleaning up upload context {upload_id}: {str(e)}"
         print(error_message)
         return jsonify({'error': error_message}), 500
 
@@ -220,7 +141,7 @@ def check_references():
 @yaml_bp.route('/upload', methods=['POST'])
 def upload():
     """
-    Upload a single YAML file to GCS and process it.
+    Upload a single YAML file and process it.
 
     Request body:
         file: YAML file to upload
@@ -228,15 +149,6 @@ def upload():
     Returns:
         JSON object containing the processed config and the uploadId.
     """
-    # Try to clean up the temporary directory before processing a new upload
-    # But don't fail if cleanup fails
-    try:
-        cleanup_temp_directory()
-    except Exception as e:
-        print(f"WARNING: Temp directory cleanup failed but continuing: {e}")
-    
-    if not gcs_bucket:
-         return jsonify({'error': 'GCS not configured on server'}), 500
     if 'file' not in request.files:
         return jsonify({'error': 'No file provided'}), 400
     file = request.files['file']
@@ -244,28 +156,24 @@ def upload():
         return jsonify({'error': 'No file selected'}), 400
 
     upload_id = str(uuid.uuid4())
-    gcs_prefix = f"uploads/{upload_id}/"
     original_filename = secure_filename(file.filename)
-    gcs_blob_name = f"{gcs_prefix}{original_filename}"
 
     local_temp_dir = None
     local_file_path = None
     try:
-        # Save locally temporarily to upload to GCS
+        # Save file temporarily
         local_temp_dir = tempfile.mkdtemp()
         local_file_path = os.path.join(local_temp_dir, original_filename)
         file.save(local_file_path)
 
-        # Upload the main file to GCS
-        gcs_uri = upload_to_gcs(local_file_path, gcs_blob_name)
-        print(f"Uploaded main file to: {gcs_uri}")
+        # Copy file to upload directory
+        copy_file_to_upload(local_file_path, upload_id, original_filename)
+        print(f"Saved main file for upload {upload_id}: {original_filename}")
 
-        # Process the YAML file using its GCS path/upload_id
-        # process_yaml_file needs to be adapted for GCS
-        # It should accept upload_id and the relative path (original_filename here)
+        # Process the YAML file
         config = process_yaml_file(upload_id=upload_id, relative_path=original_filename)
 
-        # Check for embedded errors (assuming process_yaml_file returns them similarly)
+        # Check for embedded errors
         processing_errors = []
         if isinstance(config, dict) and 'modules' in config:
             for module_name, module_data in config['modules'].items():
@@ -276,21 +184,24 @@ def upload():
                       })
         if processing_errors:
             print(f"Found errors during processing: {processing_errors}")
-            # Clean up GCS on error
-            delete_gcs_prefix(gcs_prefix)
+            # Clean up on error
+            delete_upload_directory(upload_id)
             return jsonify({'error': 'Errors occurred during YAML processing.', 'details': processing_errors}), 422
 
-        # Return config and the upload ID with CORS header
+        # Return config and the upload ID
         response = make_response(jsonify({'config': config, 'uploadId': upload_id}))
-        response.headers['Access-Control-Allow-Origin'] = 'https://network-visualizer-36300.web.app' # Or '*' for testing, but specific is better
+        response.headers['Access-Control-Allow-Origin'] = '*'
         return response
 
     except Exception as e:
         error_message = f"Error processing single YAML upload: {str(e)}"
         tb_str = traceback.format_exc()
         print(f"{error_message}\nTraceback:\n{tb_str}")
-        # Clean up GCS on error
-        delete_gcs_prefix(gcs_prefix)
+        # Clean up on error
+        try:
+            delete_upload_directory(upload_id)
+        except:
+            pass
         return jsonify({'error': error_message}), 500
     finally:
         # Clean up local temporary directory
@@ -304,7 +215,7 @@ def upload():
 @yaml_bp.route('/upload-folder', methods=['POST'])
 def upload_folder():
     """
-    Upload a folder (zip), extract locally, upload contents to GCS, process main file.
+    Upload a folder (zip), extract locally, copy to upload directory, process main file.
 
     Request body:
         zip_file: Zip file containing YAML files
@@ -313,15 +224,6 @@ def upload_folder():
     Returns:
         JSON object containing the processed config and the uploadId.
     """
-    # Try to clean up the temporary directory before processing a new upload
-    # But don't fail if cleanup fails
-    try:
-        cleanup_temp_directory()
-    except Exception as e:
-        print(f"WARNING: Temp directory cleanup failed but continuing: {e}")
-    
-    if not gcs_bucket:
-         return jsonify({'error': 'GCS not configured on server'}), 500
     if 'zip_file' not in request.files:
         return jsonify({'error': 'No zip file provided'}), 400
     zip_file_storage = request.files['zip_file']
@@ -333,7 +235,6 @@ def upload_folder():
         return jsonify({'error': 'No main file specified'}), 400
 
     upload_id = str(uuid.uuid4())
-    gcs_prefix = f"uploads/{upload_id}/"
     local_extract_dir = None
 
     try:
@@ -350,19 +251,16 @@ def upload_folder():
         if not os.path.exists(local_main_file_path):
             return jsonify({'error': f'Main file not found in zip: {main_file_relative}'}), 400
 
-        # Upload all extracted files to GCS under the upload_id prefix
-        print(f"Uploading extracted files to GCS prefix: {gcs_prefix}")
+        # Copy all extracted files to upload directory
+        print(f"Copying extracted files to upload directory: {upload_id}")
         for root, _, files in os.walk(local_extract_dir):
             for filename in files:
                 local_path = os.path.join(root, filename)
                 # Calculate relative path within the extracted structure
                 relative_path = os.path.relpath(local_path, local_extract_dir)
-                gcs_blob_name = f"{gcs_prefix}{relative_path}"
-                upload_to_gcs(local_path, gcs_blob_name)
+                copy_file_to_upload(local_path, upload_id, relative_path)
 
-        print(f"Processing main YAML file via GCS context: {main_file_relative}")
-        # Process the main YAML file using the upload_id and its relative path
-        # process_yaml_file needs adaptation for GCS
+        print(f"Processing main YAML file: {main_file_relative}")
         config = process_yaml_file(upload_id=upload_id, relative_path=main_file_relative)
 
         # Check for embedded errors
@@ -376,21 +274,24 @@ def upload_folder():
                        })
         if processing_errors:
             print(f"Found errors during processing: {processing_errors}")
-            # Clean up GCS on error
-            delete_gcs_prefix(gcs_prefix)
+            # Clean up on error
+            delete_upload_directory(upload_id)
             return jsonify({'error': 'Errors occurred during YAML processing.', 'details': processing_errors}), 422
 
-        # Return config and the upload ID with CORS header
+        # Return config and the upload ID
         response = make_response(jsonify({'config': config, 'uploadId': upload_id}))
-        response.headers['Access-Control-Allow-Origin'] = 'https://network-visualizer-36300.web.app' # Or '*' for testing, but specific is better
+        response.headers['Access-Control-Allow-Origin'] = '*'
         return response
 
     except Exception as e:
         error_message = f"Error processing YAML folder upload: {str(e)}"
         tb_str = traceback.format_exc()
         print(f"{error_message}\nTraceback:\n{tb_str}")
-        # Clean up GCS on error
-        delete_gcs_prefix(gcs_prefix)
+        # Clean up on error
+        try:
+            delete_upload_directory(upload_id)
+        except:
+            pass
         return jsonify({'error': error_message}), 500
     finally:
         # Clean up local extraction directory
@@ -404,16 +305,13 @@ def upload_folder():
 @yaml_bp.route('/get-subgraph', methods=['POST'])
 def get_subgraph():
     """
-    Fetch and process a referenced YAML file from GCS using the upload context.
+    Fetch and process a referenced YAML file using the upload context.
 
     Request body:
         uploadId: The unique ID for the upload session.
-        relativePath: Relative path to the YAML file within the GCS upload prefix.
+        relativePath: Relative path to the YAML file within the upload directory.
         moduleName: (Optional) Name of the module requesting the subgraph.
     """
-    if not gcs_bucket:
-         return jsonify({'error': 'GCS not configured on server'}), 500
-
     data = request.json
     upload_id = data.get('uploadId')
     relative_path = data.get('relativePath') # e.g., "block.yaml" or "inception/block.yaml"
@@ -428,16 +326,15 @@ def get_subgraph():
         print(f"Processing subgraph request for uploadId: {upload_id}, path: {relative_path}")
 
         # Process the YAML file using the upload_id and relative path
-        # process_yaml_file needs adaptation for GCS
         config = process_yaml_file(upload_id=upload_id, relative_path=relative_path)
 
-        # Check for embedded errors (including file not found within GCS context)
+        # Check for embedded errors (including file not found)
         processing_errors = []
         if isinstance(config, dict):
-            if config.get('errorType') == 'CONFIG_FILE_NOT_FOUND_GCS':
-                 # Specific error from GCS processing
+            if config.get('errorType') == 'CONFIG_FILE_NOT_FOUND_GCS' or config.get('errorType') == 'CONFIG_FILE_NOT_FOUND':
+                 # Specific error from processing
                  return jsonify({
-                     'error': config.get('error', f'Subgraph file not found in GCS: {relative_path}'),
+                     'error': config.get('error', f'Subgraph file not found: {relative_path}'),
                      'errorType': 'CONFIG_FILE_NOT_FOUND', # Keep consistent for frontend
                      'configPath': relative_path,
                      'moduleName': module_name
@@ -508,7 +405,7 @@ def crop_image_endpoint():
     # Handle preflight OPTIONS request
     if request.method == 'OPTIONS':
         response = make_response()
-        response.headers.add('Access-Control-Allow-Origin', 'https://network-visualizer-36300.web.app')
+        response.headers.add('Access-Control-Allow-Origin', '*')
         response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
         response.headers.add('Access-Control-Allow-Methods', 'POST')
         return response
@@ -533,7 +430,7 @@ def crop_image_endpoint():
         # Return the cropped image with appropriate headers
         response = make_response(cropped_data)
         response.headers.set('Content-Type', content_type)
-        response.headers.set('Access-Control-Allow-Origin', 'https://network-visualizer-36300.web.app')
+        response.headers.set('Access-Control-Allow-Origin', '*')
         return response
         
     except Exception as e:
@@ -545,94 +442,49 @@ def crop_image_endpoint():
 @yaml_bp.route('/list-presets', methods=['GET'])
 def list_presets():
     """
-    List all available pre-uploaded configurations from the GCS bucket.
+    List all available pre-uploaded configurations from the local presets directory.
     
     Returns:
         JSON object containing the list of available presets (subfolder names).
     """
-    if not gcs_bucket:
-        print("ERROR: GCS bucket not configured. Check GCS_BUCKET_NAME environment variable.")
-        return jsonify({'error': 'GCS not configured on server'}), 500
-    
     try:
-        print("=" * 80)
-        print("DETAILED PRESET LISTING DEBUG INFO")
-        print("=" * 80)
-        print(f"DEBUG: Full GCS path being searched: gs://{GCS_BUCKET_NAME}/{PRESETS_PATH}")
-        print(f"DEBUG: Bucket name: {GCS_BUCKET_NAME}")
-        print(f"DEBUG: Preset path prefix: {PRESETS_PATH}")
+        preset_list = []
+        if os.path.exists(LOCAL_PRESETS_DIR):
+            # List directories in LOCAL_PRESETS_DIR that contain model.yaml
+            for item in os.listdir(LOCAL_PRESETS_DIR):
+                item_path = os.path.join(LOCAL_PRESETS_DIR, item)
+                if os.path.isdir(item_path):
+                    # Check if it contains model.yaml
+                    model_yaml = os.path.join(item_path, 'model.yaml')
+                    if os.path.exists(model_yaml):
+                        preset_list.append(item)
         
-        # List all blobs under the presets path (no delimiter)
-        print(f"DEBUG: Listing all blobs under prefix '{PRESETS_PATH}' to find model.yaml files:")
-        all_blobs = list(storage_client.list_blobs(GCS_BUCKET_NAME, prefix=PRESETS_PATH))
-        print(f"DEBUG: Found {len(all_blobs)} total blobs under prefix.")
-
-        # Get unique parent folder names containing 'model.yaml'
-        prefixes = set()
-        for blob in all_blobs:
-            print(f"DEBUG: Checking blob: {blob.name}")
-            # Check if the blob is named 'model.yaml' and is inside a subfolder of PRESETS_PATH
-            if blob.name.endswith('/model.yaml') and blob.name != PRESETS_PATH + 'model.yaml':
-                # Extract the path part before '/model.yaml'
-                path_part = blob.name[:-len('/model.yaml')] # e.g., "presets/GoogLeNet"
-                print(f"DEBUG: Found model.yaml at: {blob.name}, path part: {path_part}")
-                # Ensure it's under the PRESETS_PATH
-                if path_part.startswith(PRESETS_PATH):
-                    # Get the relative path from PRESETS_PATH
-                    relative_folder_path = path_part[len(PRESETS_PATH):] # e.g., "GoogLeNet"
-                    # Get the top-level folder name
-                    folder_name = relative_folder_path.split('/')[0]
-                    if folder_name: # Ensure it's not empty
-                        print(f"DEBUG: Extracted preset folder name: '{folder_name}'")
-                        prefixes.add(folder_name)
-                    else:
-                         print(f"DEBUG: Skipping blob {blob.name}, couldn't extract valid folder name.")
-                else:
-                     print(f"DEBUG: Skipping blob {blob.name}, path part doesn't start with {PRESETS_PATH}")
-            else:
-                 print(f"DEBUG: Skipping blob {blob.name}, not a model.yaml in a subfolder.")
+        preset_list = sorted(preset_list)
+        print(f"Found {len(preset_list)} presets: {preset_list}")
         
-        # Convert to sorted list
-        preset_list = sorted(list(prefixes))
-        
-        print(f"DEBUG: Found {len(preset_list)} presets: {preset_list}")
-        
-        # Return the list of presets with CORS header
+        # Return the list of presets
         response = make_response(jsonify({'presets': preset_list}))
-        # Allow requests from any origin during development/debugging
         response.headers['Access-Control-Allow-Origin'] = '*'
         return response
     except Exception as e:
         error_message = f"Error listing presets: {str(e)}"
         tb_str = traceback.format_exc()
         print(f"ERROR: {error_message}\nTraceback:\n{tb_str}")
-        
-        # Return error with CORS header and more detailed information
-        response = make_response(jsonify({
-            'error': error_message,
-            'details': {
-                'bucket': GCS_BUCKET_NAME,
-                'presets_path': PRESETS_PATH,
-                'traceback': tb_str
-            }
-        }))
+        response = make_response(jsonify({'error': error_message}))
         response.headers['Access-Control-Allow-Origin'] = '*'
         return response, 500
 
 @yaml_bp.route('/load-preset', methods=['POST'])
 def load_preset():
     """
-    Load a pre-uploaded configuration from the GCS bucket.
+    Load a pre-uploaded configuration from the local presets directory.
     
     Request body:
-        presetName: The name of the preset to load (subfolder name or file name without extension)
+        presetName: The name of the preset to load (subfolder name)
     
     Returns:
         JSON object containing the processed config and the uploadId.
     """
-    if not gcs_bucket:
-        return jsonify({'error': 'GCS not configured on server'}), 500
-    
     data = request.json
     if not data or 'presetName' not in data:
         return jsonify({'error': 'No preset name provided'}), 400
@@ -640,152 +492,41 @@ def load_preset():
     preset_name = data['presetName']
     
     try:
-        print(f"DEBUG: Loading preset '{preset_name}'")
+        print(f"Loading preset '{preset_name}'")
         
         # Generate a new upload ID for this preset
         upload_id = str(uuid.uuid4())
-        gcs_prefix = f"uploads/{upload_id}/"
         
-        # First check if this is a direct YAML file
-        direct_yaml_path = f"{PRESETS_PATH}{preset_name}.yaml"
-        direct_yml_path = f"{PRESETS_PATH}{preset_name}.yml"
+        # Check if preset directory exists
+        preset_dir = os.path.join(LOCAL_PRESETS_DIR, preset_name)
+        if not os.path.exists(preset_dir):
+            return jsonify({'error': f"Preset '{preset_name}' not found"}), 404
         
-        # Check if the preset is a direct YAML file
-        direct_yaml_blob = None
-        try:
-            direct_yaml_blob = gcs_bucket.blob(direct_yaml_path)
-            if direct_yaml_blob.exists():
-                print(f"DEBUG: Found direct YAML file: {direct_yaml_path}")
-                main_file = f"{preset_name}.yaml"
-                
-                # Copy the YAML file to the uploads location
-                new_blob_name = f"{gcs_prefix}{preset_name}.yaml"
-                new_blob = gcs_bucket.blob(new_blob_name)
-                
-                # Copy the blob
-                token = None
-                rewrite_token = None
-                while True:
-                    token, rewrite_token, bytes_rewritten = new_blob.rewrite(
-                        source=direct_yaml_blob, token=rewrite_token
-                    )
-                    if token is None:
-                        break
-                
-                print(f"DEBUG: Copied {direct_yaml_path} to {new_blob_name}")
-                
-                # Process the YAML file
-                print(f"DEBUG: Processing direct YAML file: {preset_name}.yaml")
-                config = process_yaml_file(upload_id=upload_id, relative_path=f"{preset_name}.yaml")
-                
-                # Return config and the upload ID with CORS header
-                response = make_response(jsonify({'config': config, 'uploadId': upload_id}))
-                response.headers['Access-Control-Allow-Origin'] = 'https://network-visualizer-36300.web.app'
-                return response
-        except Exception as e:
-            print(f"DEBUG: Error checking for direct YAML file: {e}")
-            # Continue to check for folder
-        
-        # If not a direct file, check for .yml extension
-        try:
-            direct_yml_blob = gcs_bucket.blob(direct_yml_path)
-            if direct_yml_blob.exists():
-                print(f"DEBUG: Found direct YML file: {direct_yml_path}")
-                main_file = f"{preset_name}.yml"
-                
-                # Copy the YAML file to the uploads location
-                new_blob_name = f"{gcs_prefix}{preset_name}.yml"
-                new_blob = gcs_bucket.blob(new_blob_name)
-                
-                # Copy the blob
-                token = None
-                rewrite_token = None
-                while True:
-                    token, rewrite_token, bytes_rewritten = new_blob.rewrite(
-                        source=direct_yml_blob, token=rewrite_token
-                    )
-                    if token is None:
-                        break
-                
-                print(f"DEBUG: Copied {direct_yml_path} to {new_blob_name}")
-                
-                # Process the YAML file
-                print(f"DEBUG: Processing direct YML file: {preset_name}.yml")
-                config = process_yaml_file(upload_id=upload_id, relative_path=f"{preset_name}.yml")
-                
-                # Return config and the upload ID with CORS header
-                response = make_response(jsonify({'config': config, 'uploadId': upload_id}))
-                response.headers['Access-Control-Allow-Origin'] = 'https://network-visualizer-36300.web.app'
-                return response
-        except Exception as e:
-            print(f"DEBUG: Error checking for direct YML file: {e}")
-            # Continue to check for folder
-        
-        # If not a direct file, check for folder
-        preset_path = f"{PRESETS_PATH}{preset_name}/"
-        main_file = "model.yaml"  # Default main file name
-        
-        print(f"DEBUG: Checking for folder at path: {preset_path}")
-        
-        # Check if the preset exists as a folder
-        blobs = list(storage_client.list_blobs(GCS_BUCKET_NAME, prefix=preset_path))
-        if not blobs:
-            print(f"DEBUG: No blobs found with prefix '{preset_path}'")
-            return jsonify({'error': f"Preset '{preset_name}' not found as file or folder"}), 404
-        
-        print(f"DEBUG: Found {len(blobs)} blobs in preset folder '{preset_name}'")
-        for blob in blobs:
-            print(f"DEBUG: Found blob: {blob.name}")
-        
-        # Find the main file
-        main_file_blob = None
-        for blob in blobs:
-            if blob.name.endswith('/model.yaml') or blob.name.endswith('/main.yaml'):
-                main_file_blob = blob
-                main_file = blob.name[len(preset_path):]  # Get relative path
-                print(f"DEBUG: Found main file: {main_file}")
-                break
-        
-        if not main_file_blob:
-            # If no model.yaml or main.yaml found, look for any .yaml file
-            for blob in blobs:
-                if blob.name.endswith('.yaml') or blob.name.endswith('.yml'):
-                    main_file_blob = blob
-                    main_file = blob.name[len(preset_path):]  # Get relative path
-                    print(f"DEBUG: Using {main_file} as main file")
+        # Find the main file (model.yaml or first .yaml file)
+        main_file = None
+        if os.path.exists(os.path.join(preset_dir, 'model.yaml')):
+            main_file = 'model.yaml'
+        elif os.path.exists(os.path.join(preset_dir, 'main.yaml')):
+            main_file = 'main.yaml'
+        else:
+            # Look for any .yaml or .yml file
+            for item in os.listdir(preset_dir):
+                if item.endswith('.yaml') or item.endswith('.yml'):
+                    main_file = item
                     break
         
-        if not main_file_blob:
-            print(f"DEBUG: No YAML files found in preset folder '{preset_name}'")
-            return jsonify({'error': f"No YAML files found in preset folder '{preset_name}'"}), 404
+        if not main_file:
+            return jsonify({'error': f"No YAML files found in preset '{preset_name}'"}), 404
         
-        print(f"DEBUG: Generated upload ID: {upload_id}")
-        
-        # Copy each blob to the new upload location
-        for blob in blobs:
-            # Get the relative path within the preset folder
-            relative_path = blob.name[len(preset_path):]
-            if not relative_path:  # Skip the folder itself
-                continue
-                
-            # Create a new blob in the uploads location
-            new_blob_name = f"{gcs_prefix}{relative_path}"
-            new_blob = gcs_bucket.blob(new_blob_name)
-            
-            # Copy the blob
-            token = None
-            rewrite_token = None
-            while True:
-                token, rewrite_token, bytes_rewritten = new_blob.rewrite(
-                    source=blob, token=rewrite_token
-                )
-                if token is None:
-                    break
-            
-            print(f"DEBUG: Copied {blob.name} to {new_blob_name}")
+        # Copy all files from preset directory to upload directory
+        for root, _, files in os.walk(preset_dir):
+            for filename in files:
+                source_file = os.path.join(root, filename)
+                rel_path = os.path.relpath(source_file, preset_dir)
+                copy_file_to_upload(source_file, upload_id, rel_path)
         
         # Process the main YAML file
-        print(f"DEBUG: Processing main file: {main_file}")
+        print(f"Processing main file: {main_file}")
         config = process_yaml_file(upload_id=upload_id, relative_path=main_file)
         
         # Check for embedded errors
@@ -799,13 +540,12 @@ def load_preset():
                     })
         if processing_errors:
             print(f"Found errors during processing: {processing_errors}")
-            # Clean up GCS on error
-            delete_gcs_prefix(gcs_prefix)
+            delete_upload_directory(upload_id)
             return jsonify({'error': 'Errors occurred during YAML processing.', 'details': processing_errors}), 422
         
-        # Return config and the upload ID with CORS header
+        # Return config and the upload ID
         response = make_response(jsonify({'config': config, 'uploadId': upload_id}))
-        response.headers['Access-Control-Allow-Origin'] = 'https://network-visualizer-36300.web.app'
+        response.headers['Access-Control-Allow-Origin'] = '*'
         return response
         
     except Exception as e:

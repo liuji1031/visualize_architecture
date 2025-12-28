@@ -38,8 +38,8 @@ export interface UploadResponse {
   uploadId: string;
 }
 
-// Backend API base URL
-export const API_BASE_URL = 'https://network-visualizer-backend-846251040656.us-east4.run.app/api'; // Will be replaced during build/deployment
+// Backend API base URL - local development
+export const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:5000/api';
 
 /**
  * Clean up the GCS resources for a specific upload session

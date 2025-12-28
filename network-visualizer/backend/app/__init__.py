@@ -15,8 +15,8 @@ def create_app():
     # IMPORTANT: Use a strong, unique secret in production, possibly from environment variables
     app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'dev-secret-key-replace-in-prod')
     
-    # Configure CORS more explicitly to allow credentials
-    CORS(app, supports_credentials=True, origins=["http://localhost:3000","https://network-visualizer-36300.web.app"]) # Adjust origin if your frontend runs elsewhere
+    # Configure CORS to allow localhost for local development
+    CORS(app, supports_credentials=True, origins=["http://localhost:3000", "http://localhost:3001"])
     
     # Register blueprints
     from .routes.yaml_routes import yaml_bp
