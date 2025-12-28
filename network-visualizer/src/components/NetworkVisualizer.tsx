@@ -46,7 +46,7 @@ import {
   loadPresetConfiguration,
   API_BASE_URL // Import API_BASE_URL
 } from '../services/api';
-import { processNetworkStructure, NODE_WIDTH, HORIZONTAL_SPACING } from '../utils/networkProcessor';
+import { processNetworkStructure, NODE_WIDTH, HORIZONTAL_SPACING, VERTICAL_SPACING } from '../utils/networkProcessor';
 import { getNodeBackgroundColor, nodeTypeStyles } from '../utils/colorUtils'; // Import color utils
 import CustomNode from './CustomNode';
 // import CustomEdge from './CustomEdge'; // No longer needed if using default types
@@ -87,6 +87,8 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [showEdgeLabels, setShowEdgeLabels] = useState<boolean>(false); // Default to false
   const [showInputEdgeLabels, setShowInputEdgeLabels] = useState<boolean>(false); // Default to false
+  const [isCompact, setIsCompact] = useState<boolean>(false); // Compact mode for reduced vertical spacing
+  const [compactReductionPercent, setCompactReductionPercent] = useState<number>(10); // Percentage to reduce spacing (default 10%)
   const [currentUploadId, setCurrentUploadId] = useState<string | null>(null); // State for upload ID
   const [showUI, setShowUI] = useState<boolean>(true); // Control UI visibility during export
   const [showBackground, setShowBackground] = useState<boolean>(true); // Control background visibility during export
@@ -122,6 +124,106 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({
     setShowInputEdgeLabels(prev => !prev);
   }, []);
 
+  // Handle toggle for compact mode and regenerate graph
+  const toggleCompact = useCallback(() => {
+    setIsCompact(prev => {
+      const newCompact = !prev;
+      // Regenerate graph with new spacing if we have a current config
+      const currentState = historyStack[currentGraphIndex];
+      if (currentState?.config) {
+        // Always use original VERTICAL_SPACING for layout
+        const { nodes: newNodes, edges: newEdges } = processNetworkStructure(currentState.config, VERTICAL_SPACING);
+        
+        // When compact mode is enabled, scale Y positions to reduce vertical spacing
+        let finalNodes = newNodes;
+        if (newCompact && newNodes.length > 0) {
+          const minY = Math.min(...newNodes.map(n => n.position.y));
+          const scaleFactor = 1 - compactReductionPercent / 100;
+          finalNodes = newNodes.map(node => ({
+            ...node,
+            position: {
+              ...node.position,
+              y: minY + (node.position.y - minY) * scaleFactor
+            }
+          }));
+        }
+        const customNodes = finalNodes.map(node => ({ ...node, type: 'custom', hidden: false }));
+        const customEdges = newEdges.map(edge => ({
+          ...edge,
+          type: 'modifiedBezier',
+          hidden: false,
+          style: { strokeWidth: 1.5, stroke: '#555', fill: 'none' },
+          markerEnd: { 
+            type: MarkerType.ArrowClosed, 
+            width: 20, 
+            height: 20, 
+            color: '#555',
+            strokeWidth: 1
+          },
+        }));
+        setNodes(customNodes);
+        setEdges(customEdges);
+        // Update history stack with new nodes/edges
+        const updatedState = { ...currentState, nodes: customNodes, edges: customEdges };
+        const newHistoryStack = [...historyStack];
+        newHistoryStack[currentGraphIndex] = updatedState;
+        setHistoryStack(newHistoryStack);
+      }
+      return newCompact;
+    });
+  }, [historyStack, currentGraphIndex, setNodes, setEdges, setHistoryStack, compactReductionPercent]);
+
+  // Handle change in compact reduction percentage and regenerate graph if compact mode is active
+  const handleCompactReductionChange = useCallback((value: string) => {
+    const numValue = parseFloat(value);
+    if (!isNaN(numValue) && numValue >= 0 && numValue <= 100) {
+      setCompactReductionPercent(numValue);
+      // Regenerate graph if compact mode is currently enabled
+      if (isCompact) {
+        const currentState = historyStack[currentGraphIndex];
+        if (currentState?.config) {
+          // Use original VERTICAL_SPACING for layout, then scale Y positions
+          const { nodes: newNodes, edges: newEdges } = processNetworkStructure(currentState.config, VERTICAL_SPACING);
+          
+          // Scale Y positions to reduce vertical spacing
+          let finalNodes = newNodes;
+          if (newNodes.length > 0) {
+            const minY = Math.min(...newNodes.map(n => n.position.y));
+            const scaleFactor = 1 - numValue / 100;
+            finalNodes = newNodes.map(node => ({
+              ...node,
+              position: {
+                ...node.position,
+                y: minY + (node.position.y - minY) * scaleFactor
+              }
+            }));
+          }
+          const customNodes = finalNodes.map(node => ({ ...node, type: 'custom', hidden: false }));
+          const customEdges = newEdges.map(edge => ({
+            ...edge,
+            type: 'modifiedBezier',
+            hidden: false,
+            style: { strokeWidth: 1.5, stroke: '#555', fill: 'none' },
+            markerEnd: { 
+              type: MarkerType.ArrowClosed, 
+              width: 20, 
+              height: 20, 
+              color: '#555',
+              strokeWidth: 1
+            },
+          }));
+          setNodes(customNodes);
+          setEdges(customEdges);
+          // Update history stack with new nodes/edges
+          const updatedState = { ...currentState, nodes: customNodes, edges: customEdges };
+          const newHistoryStack = [...historyStack];
+          newHistoryStack[currentGraphIndex] = updatedState;
+          setHistoryStack(newHistoryStack);
+        }
+      }
+    }
+  }, [isCompact, historyStack, currentGraphIndex, setNodes, setEdges, setHistoryStack]);
+
   useEffect(() => {
     let resizeTimeout: NodeJS.Timeout | null = null;
     const handleResize = () => {
@@ -144,8 +246,24 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({
 
   // Simplified createGraphElements to always use modifiedBezier
   const createGraphElements = (config: YamlConfig): { nodes: Node[], edges: Edge[] } => {
-    const { nodes: processedNodes, edges: processedEdges } = processNetworkStructure(config);
-    const customNodes = processedNodes.map((node) => ({ ...node, type: 'custom', hidden: false }));
+    // Always use the original VERTICAL_SPACING (0) for layout
+    const { nodes: processedNodes, edges: processedEdges } = processNetworkStructure(config, VERTICAL_SPACING);
+    
+    // When compact mode is enabled, scale Y positions to reduce vertical spacing
+    let finalNodes = processedNodes;
+    if (isCompact && processedNodes.length > 0) {
+      // Find the top-most node to use as anchor point
+      const minY = Math.min(...processedNodes.map(n => n.position.y));
+      const scaleFactor = 1 - compactReductionPercent / 100;
+      finalNodes = processedNodes.map(node => ({
+        ...node,
+        position: {
+          ...node.position,
+          y: minY + (node.position.y - minY) * scaleFactor
+        }
+      }));
+    }
+    const customNodes = finalNodes.map((node) => ({ ...node, type: 'custom', hidden: false }));
     const customEdges = processedEdges.map((edge) => ({
       ...edge,
       type: 'modifiedBezier', // Always use modifiedBezier
@@ -1145,6 +1263,28 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({
                 <div style={{ display: 'flex', alignItems: 'center', backgroundColor: '#f0f0f0', padding: '8px 12px', borderRadius: '4px', border: '1px solid #ccc' }}>
                   <input type="checkbox" id="input-edge-labels-toggle" checked={showInputEdgeLabels} onChange={toggleInputEdgeLabels} style={{ marginRight: '8px' }} />
                   <label htmlFor="input-edge-labels-toggle" style={{ fontSize: '14px', cursor: 'pointer' }}>Show Input Edge Labels</label>
+                </div>
+                {/* Add Make Compact button and percentage input */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: '#f0f0f0', padding: '8px 12px', borderRadius: '4px', border: '1px solid #ccc' }}>
+                  <button onClick={toggleCompact} style={{ padding: '8px 12px', backgroundColor: isCompact ? '#17a2b8' : '#6c757d', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
+                    {isCompact ? 'Make Normal' : 'Make Compact'}
+                  </button>
+                  {isCompact && (
+                    <>
+                      <label htmlFor="compact-reduction-percent" style={{ fontSize: '14px' }}>Reduce by:</label>
+                      <input 
+                        type="number" 
+                        id="compact-reduction-percent"
+                        min="0" 
+                        max="100" 
+                        step="1"
+                        value={compactReductionPercent} 
+                        onChange={(e) => handleCompactReductionChange(e.target.value)}
+                        style={{ width: '60px', padding: '4px', borderRadius: '4px', border: '1px solid #ccc' }}
+                      />
+                      <span style={{ fontSize: '14px' }}>%</span>
+                    </>
+                  )}
                 </div>
                 {/* Edge type toggle button removed */}
               </div>

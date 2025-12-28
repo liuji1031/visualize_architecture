@@ -5,14 +5,15 @@ import { YamlConfig, NetworkStructure, YamlModule } from '../types';
 export const NODE_WIDTH = 200;
 export const NODE_HEIGHT = 100; // Height might be more relevant now
 export const HORIZONTAL_SPACING = 30; // Spacing between nodes in the same rank (horizontal)
-export const VERTICAL_SPACING = 0; // Spacing between ranks (vertical)
+export const VERTICAL_SPACING = 0; // Spacing between ranks (vertical) - uses dagre default when 0
 
 /**
  * Process the YAML configuration into a network structure for ReactFlow
  * @param config - Parsed YAML configuration
+ * @param verticalSpacing - Optional vertical spacing between ranks (defaults to VERTICAL_SPACING)
  * @returns Network structure with nodes and edges
  */
-export const processNetworkStructure = (config: YamlConfig): NetworkStructure => {
+export const processNetworkStructure = (config: YamlConfig, verticalSpacing?: number): NetworkStructure => {
   const { modules } = config;
   
   // Process nodes
@@ -183,8 +184,9 @@ export const processNetworkStructure = (config: YamlConfig): NetworkStructure =>
     }
   });
   
-  // Apply layout algorithm
-  const { nodes: positionedNodes } = applyLayout({ nodes, edges });
+  // Apply layout algorithm with specified vertical spacing
+  const effectiveVerticalSpacing = verticalSpacing !== undefined ? verticalSpacing : VERTICAL_SPACING;
+  const { nodes: positionedNodes } = applyLayout({ nodes, edges }, effectiveVerticalSpacing);
 
   return {
     nodes: positionedNodes,
@@ -239,15 +241,16 @@ const parseInputSource = (inputSource: string): [string, number | undefined] => 
 /**
  * Apply layout algorithm to position nodes
  * @param network - Network structure with nodes and edges
+ * @param verticalSpacing - Vertical spacing between ranks (defaults to VERTICAL_SPACING)
  * @returns Network structure with positioned nodes
  */
-export const applyLayout = (network: NetworkStructure): NetworkStructure => {
+export const applyLayout = (network: NetworkStructure, verticalSpacing: number = VERTICAL_SPACING): NetworkStructure => {
   const { nodes, edges } = network;
   
   // Create a new graph
   const g = new dagre.graphlib.Graph();
   // Set layout direction to Top-to-Bottom ('TB') and adjust spacing
-  g.setGraph({ rankdir: 'TB', nodesep: HORIZONTAL_SPACING, ranksep: VERTICAL_SPACING });
+  g.setGraph({ rankdir: 'TB', nodesep: HORIZONTAL_SPACING, ranksep: verticalSpacing });
   g.setDefaultEdgeLabel(() => ({}));
   
   // Add nodes to the graph
