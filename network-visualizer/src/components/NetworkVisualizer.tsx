@@ -53,7 +53,11 @@ import CustomNode from './CustomNode';
 import ModifiedBezierEdge from './ModifiedBezierEdge'; // Import the new custom edge
 
 // Create a context for edge label visibility
-export const EdgeLabelContext = createContext<boolean>(true);
+export interface EdgeLabelVisibility {
+  showAllLabels: boolean;
+  showInputLabels: boolean;
+}
+export const EdgeLabelContext = createContext<EdgeLabelVisibility>({ showAllLabels: true, showInputLabels: false });
 
 interface NetworkVisualizerProps {
   yamlContent?: string;
@@ -82,6 +86,7 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({
   const [zipFile, setZipFile] = useState<File | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [showEdgeLabels, setShowEdgeLabels] = useState<boolean>(false); // Default to false
+  const [showInputEdgeLabels, setShowInputEdgeLabels] = useState<boolean>(false); // Default to false
   const [currentUploadId, setCurrentUploadId] = useState<string | null>(null); // State for upload ID
   const [showUI, setShowUI] = useState<boolean>(true); // Control UI visibility during export
   const [showBackground, setShowBackground] = useState<boolean>(true); // Control background visibility during export
@@ -110,6 +115,11 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({
   // Handle toggle for edge labels
   const toggleEdgeLabels = useCallback(() => {
     setShowEdgeLabels(prev => !prev);
+  }, []);
+
+  // Handle toggle for input edge labels
+  const toggleInputEdgeLabels = useCallback(() => {
+    setShowInputEdgeLabels(prev => !prev);
   }, []);
 
   useEffect(() => {
@@ -773,7 +783,10 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({
         const sourceControlX = sourceHandleX;
         const targetControlX = targetHandleX;
         let labelElement = '';
-        if (showEdgeLabels && edge.data?.label) {
+        // Determine if label should be shown based on edge source
+        // If showEdgeLabels is true, show all labels; otherwise, only show input labels if showInputEdgeLabels is true
+        const shouldShowLabel = showEdgeLabels || (edge.source === 'input' && showInputEdgeLabels);
+        if (shouldShowLabel && edge.data?.label) {
           const t = 0.92;
           const cubicBezierPoint = require('../utils/networkProcessor').cubicBezierPoint;
           const labelPoint = cubicBezierPoint(
@@ -918,7 +931,7 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({
       console.error('Error in SVG export function:', error);
       setError(`Failed to export SVG: ${error instanceof Error ? error.message : String(error)}`);
     }
-  }, [reactFlowInstance, setError, showEdgeLabels]);
+  }, [reactFlowInstance, setError, showEdgeLabels, showInputEdgeLabels]);
 
   // Refactor the export functionality into a reusable function
   const exportImage = useCallback((format: 'png' | 'svg') => {
@@ -1044,7 +1057,7 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({
   }), [handleNodeDoubleClick]);
 
   return (
-    <EdgeLabelContext.Provider value={showEdgeLabels}>
+    <EdgeLabelContext.Provider value={{ showAllLabels: showEdgeLabels, showInputLabels: showInputEdgeLabels }}>
       <div style={{ width: '100%', height: '100%' }} ref={reactFlowWrapper}> {/* Add ref here */}
         <ReactFlow
           nodes={nodes}
@@ -1127,6 +1140,11 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({
                 <div style={{ display: 'flex', alignItems: 'center', backgroundColor: '#f0f0f0', padding: '8px 12px', borderRadius: '4px', border: '1px solid #ccc' }}>
                   <input type="checkbox" id="edge-labels-toggle" checked={showEdgeLabels} onChange={toggleEdgeLabels} style={{ marginRight: '8px' }} />
                   <label htmlFor="edge-labels-toggle" style={{ fontSize: '14px', cursor: 'pointer' }}>Show Edge Labels</label>
+                </div>
+                {/* Add checkbox for input edge labels */}
+                <div style={{ display: 'flex', alignItems: 'center', backgroundColor: '#f0f0f0', padding: '8px 12px', borderRadius: '4px', border: '1px solid #ccc' }}>
+                  <input type="checkbox" id="input-edge-labels-toggle" checked={showInputEdgeLabels} onChange={toggleInputEdgeLabels} style={{ marginRight: '8px' }} />
+                  <label htmlFor="input-edge-labels-toggle" style={{ fontSize: '14px', cursor: 'pointer' }}>Show Input Edge Labels</label>
                 </div>
                 {/* Edge type toggle button removed */}
               </div>

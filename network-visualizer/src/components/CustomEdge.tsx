@@ -21,7 +21,10 @@ const CustomEdge: React.FC<CustomEdgeProps> = ({
   markerEnd,
 }) => {
   // Consume the context value
-  const showLabels = useContext(EdgeLabelContext);
+  const { showAllLabels, showInputLabels } = useContext(EdgeLabelContext);
+  // Determine if label should be shown based on edge source
+  // If showAllLabels is true, show all labels; otherwise, only show input labels if showInputLabels is true
+  const showLabels = showAllLabels || (source === 'input' && showInputLabels);
 
   // Calculate the path for the edge
   const [edgePath, labelX, labelY] = getBezierPath({

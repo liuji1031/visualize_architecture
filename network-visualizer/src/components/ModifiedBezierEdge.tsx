@@ -41,6 +41,7 @@ const getModifiedBezierPath = (
 
 const ModifiedBezierEdge: React.FC<EdgeProps> = ({
   id,
+  source,
   sourceX,
   sourceY,
   targetX,
@@ -52,7 +53,10 @@ const ModifiedBezierEdge: React.FC<EdgeProps> = ({
   data, // Add data to access the label
 }) => {
   // Consume the context value to determine if labels should be shown
-  const showLabels = useContext(EdgeLabelContext);
+  const { showAllLabels, showInputLabels } = useContext(EdgeLabelContext);
+  // Determine if label should be shown based on edge source
+  // If showAllLabels is true, show all labels; otherwise, only show input labels if showInputLabels is true
+  const showLabels = showAllLabels || (source === 'input' && showInputLabels);
   // Calculate the modified path
   const edgePath = getModifiedBezierPath(
     sourceX,
