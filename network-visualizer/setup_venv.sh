@@ -9,14 +9,14 @@ fi
 
 # Create a new virtual environment
 echo "Creating virtual environment..."
-python3 -m venv backend/venv
+uv venv --python 3.12 backend/venv
 
 # Activate the virtual environment
 source backend/venv/bin/activate
 
 # Install the required packages
 echo "Installing required packages..."
-pip install -r backend/requirements.txt
+uv pip install -r backend/requirements.txt
 
 echo "Virtual environment setup complete!"
 echo "To activate the virtual environment, run:"
