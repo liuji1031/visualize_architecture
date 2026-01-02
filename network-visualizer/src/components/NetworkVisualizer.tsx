@@ -757,8 +757,8 @@ const NetworkVisualizer: React.FC<NetworkVisualizerProps> = ({
       // Get the bounding box using getNodesBounds
       const bounds = getNodesBounds(flowNodes);
       
-      // Add padding to create a padded bounding box
-      const padding = 0;
+      // Add padding to create a padded bounding box (prevents edges from being cut off)
+      const padding = 20;
       const paddedBounds = {
         x: bounds.x - padding,
         y: bounds.y - padding,
